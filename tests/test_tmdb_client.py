@@ -280,6 +280,47 @@ class TMDBClientTests(unittest.TestCase):
         self.assertEqual(movie["original_language"], "en")
         self.assertEqual(movie["trailer_url"], "https://www.youtube.com/watch?v=trailer-key")
 
+    def test_trailer_url_prefers_official_youtube_trailer(self):
+        trailer_url = TMDBClient.get_trailer_url(
+            {
+                "videos": {
+                    "results": [
+                        {
+                            "site": "YouTube",
+                            "type": "Trailer",
+                            "key": "unofficial-key",
+                            "official": False,
+                        },
+                        {
+                            "site": "YouTube",
+                            "type": "Trailer",
+                            "key": "official-key",
+                            "official": True,
+                        },
+                        {
+                            "site": "YouTube",
+                            "type": "Teaser",
+                            "key": "teaser-key",
+                            "official": True,
+                        },
+                    ]
+                }
+            }
+        )
+
+        self.assertEqual(
+            trailer_url,
+            "https://www.youtube.com/watch?v=official-key",
+        )
+
+    def test_trailer_url_is_empty_when_tmdb_has_no_youtube_trailer(self):
+        self.assertEqual(
+            TMDBClient.get_trailer_url(
+                {"videos": {"results": [{"site": "Vimeo", "type": "Trailer", "key": "x"}]}}
+            ),
+            "",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -201,6 +201,22 @@ class TMDBClient:
             {"append_to_response": "credits,videos,keywords,release_dates"},
         )
 
+    @staticmethod
+    def get_trailer_url(item: dict[str, Any]) -> str:
+        """Return the official YouTube trailer URL from TMDB video metadata."""
+        videos = (item.get("videos") or {}).get("results", [])
+        trailers = [
+            video
+            for video in videos
+            if video.get("site") == "YouTube"
+            and video.get("type") == "Trailer"
+            and video.get("key")
+        ]
+        if not trailers:
+            return ""
+        trailer = next((video for video in trailers if video.get("official")), trailers[0])
+        return f"https://www.youtube.com/watch?v={trailer['key']}"
+
     def get_category_feed(self, category: str) -> list[dict[str, Any]]:
         if category == "new":
             return self.get_now_playing()
@@ -229,7 +245,6 @@ class TMDBClient:
             for person in credits.get("crew", [])
             if person.get("job") == "Director"
         ]
-        videos = (item.get("videos") or {}).get("results", [])
         keyword_data = item.get("keywords") or {}
         if isinstance(keyword_data, dict):
             keyword_data = keyword_data.get("keywords") or keyword_data.get("results") or []
@@ -253,14 +268,7 @@ class TMDBClient:
             ),
             "",
         )
-        trailer = next(
-            (
-                f"https://www.youtube.com/watch?v={video['key']}"
-                for video in videos
-                if video.get("site") == "YouTube" and video.get("type") == "Trailer"
-            ),
-            "",
-        )
+        trailer = self.get_trailer_url(item)
         poster = item.get("poster_path")
         backdrop = item.get("backdrop_path")
         revenue = int(item.get("revenue") or 0)

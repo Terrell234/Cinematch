@@ -1,10 +1,12 @@
 # CineMatch AI
 
-CineMatch is a Streamlit movie-discovery app with a dark cinema theme, content-based recommendations, mood matching, movie blends, watchlists, analytics, and optional live movie data from TMDB. The top search accepts a movie title or a free-text description (for example, “emotional space adventure about family”) and ranks catalog recommendations by their plot, keywords, genre, cast, director, and other metadata. Filters include adjustable rating, release-year and runtime ranges, genres, and minimum vote count; they carry through catalog recommendations and movie collections. Collections can also be sorted by rating, votes, release date, or runtime.
+CineMatch is a Streamlit movie-discovery app with a dark cinema theme, content-based recommendations, mood matching, movie blends, watchlists, analytics, and optional live movie data from TMDB. The top search accepts a movie title or a free-text description (for example, “emotional space adventure about family”) and ranks catalog recommendations by their plot, keywords, genre, cast, director, and other metadata. Button-based filters let users choose a minimum rating, release decade, runtime band, minimum vote count, and any combination of genres; these carry through catalog recommendations and movie collections. Collections can also be sorted by rating, votes, release date, or runtime.
 
 Recommendation cards show the catalog's available information. With `TMDB_API_KEY` configured, the app enriches title/year-matched movies with TMDB certification, plot, keywords, cast, director, runtime, rating, vote count, budget, box office, and other movie details. Information TMDB does not provide is left unavailable rather than guessed.
 
 Movie artwork is displayed only from TMDB's image host. Posters on catalog movie cards throughout the app are accepted only when a TMDB result exactly matches both the movie title and release year; otherwise the app shows a neutral placeholder instead of unrelated artwork. Live TMDB feeds use the poster attached to the same TMDB movie record.
+
+Movie cards can load official YouTube trailers from TMDB inside the app. If a trailer is unavailable, the card offers a YouTube search link; TMDB credentials are needed to look up trailers for catalog movies.
 
 ## Run locally
 

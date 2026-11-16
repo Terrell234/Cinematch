@@ -6,7 +6,7 @@ content-based ML, Cinema Blend alchemy, visual mood matching, and live TMDB sync
 import os
 import random
 from datetime import date
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, quote_plus, urlparse
 
 import requests
 import streamlit as st
@@ -377,11 +377,11 @@ def matches_any_genre(value: str, selected_genres: set[str]) -> bool:
 
 
 def reset_cinema_filters() -> None:
-    st.session_state["min_rating"] = 7.0
+    st.session_state["rating_preset"] = "7.0+"
     st.session_state["genre_filter"] = []
-    st.session_state["year_range"] = (min_year, max_year)
-    st.session_state["runtime_range"] = runtime_bounds
-    st.session_state["min_votes"] = 0
+    st.session_state["year_preset"] = "Any year"
+    st.session_state["runtime_preset"] = "Any length"
+    st.session_state["vote_preset"] = "Any votes"
 
 
 # -------------------------------------------------------------
@@ -395,6 +395,8 @@ if "catalog_tmdb_details_cache" not in st.session_state:
     st.session_state["catalog_tmdb_details_cache"] = {}
 if "tmdb_runtime_cache" not in st.session_state:
     st.session_state["tmdb_runtime_cache"] = {}
+if "tmdb_trailer_cache" not in st.session_state:
+    st.session_state["tmdb_trailer_cache"] = {}
 
 with st.form("catalog_search_form", border=False):
     search_cols = st.columns([6, 1])
@@ -435,65 +437,99 @@ st.markdown("""
 # -------------------------------------------------------------
 with st.expander("🎛️ Filters and TMDB settings", expanded=True):
     runtime_bounds = (int(df["runtime"].min()), int(df["runtime"].max()))
-    filter_cols = st.columns([1, 1.4, 1.6])
-    with filter_cols[0]:
-        min_rating_filter = st.slider(
-            "⭐ Minimum rating",
-            min_value=0.0,
-            max_value=10.0,
-            value=st.session_state.get("min_rating", 7.0),
-            step=0.5,
-            key="min_rating",
-        )
-
     min_year = int(df["year"].min())
     max_year = max(int(df["year"].max()), date.today().year)
+    decade_starts = range((min_year // 10) * 10, (max_year // 10) * 10 + 1, 10)
+    year_presets = ["Any year", *[f"{decade}s" for decade in decade_starts]]
+    rating_presets = ["Any rating", "6.0+", "7.0+", "8.0+", "9.0+"]
+    runtime_presets = [
+        "Any length",
+        "Under 90 min",
+        "90–119 min",
+        "120–149 min",
+        "150+ min",
+    ]
+    vote_presets = ["Any votes", "1K+", "10K+", "100K+"]
+
+    filter_cols = st.columns([1, 1.4, 1.6])
+    with filter_cols[0]:
+        rating_preset = st.pills(
+            "⭐ Minimum rating",
+            options=rating_presets,
+            default="7.0+",
+            key="rating_preset",
+            help="Choose the lowest rating to include.",
+        )
+    min_rating_filter = {
+        "Any rating": 0.0,
+        "6.0+": 6.0,
+        "7.0+": 7.0,
+        "8.0+": 8.0,
+        "9.0+": 9.0,
+    }.get(rating_preset, 7.0)
+
     with filter_cols[1]:
-        year_range_filter = st.slider(
-            "📅 Release years",
-            min_value=min_year,
-            max_value=max_year,
-            value=(min_year, max_year),
-            key="year_range",
+        year_preset = st.pills(
+            "📅 Release era",
+            options=year_presets,
+            default="Any year",
+            key="year_preset",
+            help="Choose one decade, or include all release years.",
+        )
+    if year_preset == "Any year" or not year_preset:
+        year_range_filter = (min_year, max_year)
+    else:
+        decade_start = int(year_preset[:-1])
+        year_range_filter = (
+            max(min_year, decade_start),
+            min(max_year, decade_start + 9),
         )
 
     with filter_cols[2]:
-        runtime_range_filter = st.slider(
-            "⏱️ Runtime (minutes)",
-            min_value=runtime_bounds[0],
-            max_value=runtime_bounds[1],
-            value=st.session_state.get("runtime_range", runtime_bounds),
-            step=5,
-            key="runtime_range",
+        runtime_preset = st.pills(
+            "⏱️ Runtime",
+            options=runtime_presets,
+            default="Any length",
+            key="runtime_preset",
+            help="Choose a runtime group.",
         )
+    runtime_ranges = {
+        "Any length": runtime_bounds,
+        "Under 90 min": (runtime_bounds[0], min(runtime_bounds[1], 89)),
+        "90–119 min": (max(runtime_bounds[0], 90), min(runtime_bounds[1], 119)),
+        "120–149 min": (max(runtime_bounds[0], 120), min(runtime_bounds[1], 149)),
+        "150+ min": (max(runtime_bounds[0], 150), runtime_bounds[1]),
+    }
+    runtime_range_filter = runtime_ranges.get(runtime_preset, runtime_bounds)
 
     all_genres = recommender.get_all_genres()
     detail_cols = st.columns([2, 1.4, 1, 0.8])
     with detail_cols[0]:
-        genre_filters = st.multiselect(
-            "🎭 Include genres",
+        genre_filters = st.pills(
+            "🎭 Genres · choose any that fit",
             options=all_genres,
-            default=st.session_state.get("genre_filter", []),
+            selection_mode="multi",
             key="genre_filter",
+            help="Movies matching at least one selected genre are included.",
         )
 
     with detail_cols[1]:
-        max_votes = max(1, int(df["votes"].max()))
-        min_votes_filter = st.number_input(
+        vote_preset = st.pills(
             "📊 Minimum votes",
-            min_value=0,
-            max_value=max_votes,
-            value=st.session_state.get("min_votes", 0),
-            step=1000,
-            key="min_votes",
-            help="Raise this to favor movies with a larger audience sample.",
+            options=vote_presets,
+            default="Any votes",
+            key="vote_preset",
+            help="Raise this to prefer titles with larger audience samples.",
         )
+    min_votes_filter = {"Any votes": 0, "1K+": 1_000, "10K+": 10_000, "100K+": 100_000}.get(
+        vote_preset, 0
+    )
 
     with detail_cols[2]:
         st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
         st.caption(
-            f"{runtime_range_filter[0]}–{runtime_range_filter[1]} min · "
-            f"{year_range_filter[0]}–{year_range_filter[1]}"
+            f"{year_range_filter[0]}–{year_range_filter[1]} · "
+            f"{runtime_range_filter[0]}–{runtime_range_filter[1]} min"
         )
 
     with detail_cols[3]:
@@ -550,6 +586,102 @@ m_col5.metric("📌 My Watchlist", f"{len(st.session_state['watchlist'])}")
 def is_verified_tmdb_art(url: str) -> bool:
     parsed_url = urlparse(str(url or ""))
     return parsed_url.scheme == "https" and parsed_url.hostname == "image.tmdb.org"
+
+
+def verified_youtube_video_url(url: str) -> str:
+    parsed_url = urlparse(str(url or ""))
+    host = (parsed_url.hostname or "").casefold()
+    if parsed_url.scheme != "https":
+        return ""
+    if host in {"youtube.com", "www.youtube.com", "m.youtube.com"}:
+        video_id = parse_qs(parsed_url.query).get("v", [""])[0]
+        if not video_id and parsed_url.path.startswith(("/embed/", "/shorts/")):
+            video_id = parsed_url.path.split("/", 2)[2].split("/", 1)[0]
+    elif host == "youtu.be":
+        video_id = parsed_url.path.strip("/").split("/", 1)[0]
+    else:
+        return ""
+    if len(video_id) != 11 or not all(
+        character.isalnum() or character in "_-" for character in video_id
+    ):
+        return ""
+    return f"https://www.youtube.com/watch?v={video_id}"
+
+
+def render_movie_trailer(movie: dict, key_prefix: str) -> None:
+    title = str(movie.get("title") or "this movie")
+    try:
+        year = int(movie.get("year") or 0)
+    except (TypeError, ValueError):
+        year = 0
+    cache_key = f"{title.casefold()}:{year}"
+    trailer_cache = st.session_state["tmdb_trailer_cache"]
+    stored_trailer = verified_youtube_video_url(str(movie.get("trailer_url") or ""))
+    trailer_url = stored_trailer or trailer_cache.get(cache_key, "")
+    search_url = f"https://www.youtube.com/results?search_query={quote_plus(f'{title} {year} official trailer')}"
+
+    with st.expander("▶️ Watch trailer"):
+        if trailer_url:
+            st.video(trailer_url)
+            return
+
+        if cache_key in trailer_cache:
+            st.info("TMDB does not list a playable trailer for this title.")
+            st.link_button(
+                "Search trailers on YouTube",
+                search_url,
+                use_container_width=True,
+            )
+            return
+
+        if not tmdb.is_configured:
+            st.info("Connect TMDB to look up this movie's trailer.")
+            st.link_button(
+                "Search trailers on YouTube",
+                search_url,
+                use_container_width=True,
+            )
+            return
+
+        if st.button("Find official trailer", key=f"load_trailer_{key_prefix}"):
+            poster_match = (
+                st.session_state["catalog_tmdb_poster_cache_v2"].get(
+                    (title.casefold(), year)
+                )
+                if year
+                else None
+            )
+            tmdb_id = movie.get("tmdb_id") or (poster_match or {}).get("tmdb_id")
+            if not tmdb_id and year:
+                try:
+                    matched_movie = tmdb.get_catalog_poster(title, year)
+                except requests.RequestException as error:
+                    show_tmdb_error(f"Could not find a trailer for {title}", error)
+                    return
+                tmdb_id = matched_movie.get("tmdb_id") if matched_movie else None
+
+            if not tmdb_id:
+                trailer_cache[cache_key] = ""
+            else:
+                try:
+                    details = tmdb.get_movie_details(tmdb_id)
+                except requests.RequestException as error:
+                    show_tmdb_error(f"Could not load trailer for {title}", error)
+                    return
+                trailer_cache[cache_key] = verified_youtube_video_url(
+                    tmdb.get_trailer_url(details)
+                )
+
+            trailer_url = trailer_cache[cache_key]
+            if trailer_url:
+                st.video(trailer_url)
+            else:
+                st.info("TMDB does not list a playable trailer for this title.")
+                st.link_button(
+                    "Search trailers on YouTube",
+                    search_url,
+                    use_container_width=True,
+                )
 
 
 def resolve_catalog_movie_poster(movie: dict) -> dict:
@@ -627,7 +759,6 @@ def render_cinema_card(
     overview = movie.get("overview", "")
     keywords = movie.get("keywords") or "Not available"
     box_office = movie.get("box_office") or "Not available"
-    trailer_url = movie.get("trailer_url") or f"https://www.youtube.com/results?search_query={title.replace(' ', '+')}+trailer"
     match_pct = movie.get("match_percentage")
     reasons = movie.get("match_reasons", [])
 
@@ -684,11 +815,7 @@ def render_cinema_card(
                     f"{movie.get('original_language') or 'Not available'}"
                 )
 
-        with st.expander("▶️ Watch Trailer"):
-            if "youtube.com" in trailer_url or "youtu.be" in trailer_url:
-                st.video(trailer_url)
-            else:
-                st.link_button("Watch Trailer on YouTube", trailer_url, use_container_width=True)
+        render_movie_trailer(movie, f"{key_prefix}_{m_id}")
 
         # Action Buttons Row
         b_col1, b_col2 = st.columns(2)
@@ -1043,6 +1170,14 @@ with tab_cats:
                     st.markdown(f"#### {title} <span style='font-size:0.85rem; color:#94a3b8;'>({year})</span>", unsafe_allow_html=True)
                     st.markdown(f"<span class='rating-pill'>⭐ {vote_avg} / 10</span>", unsafe_allow_html=True)
                     st.caption(item.get("overview", "")[:120] + "...")
+                    render_movie_trailer(
+                        {
+                            "title": title,
+                            "year": int(year) if str(year).isdigit() else 0,
+                            "tmdb_id": tmdb_id,
+                        },
+                        f"category_tmdb_{tmdb_id or idx}",
+                    )
 
                     already_in = title.lower() in [t.lower() for t in df["title"].tolist()]
                     if already_in:
@@ -1130,8 +1265,7 @@ with tab_match:
         </div>
         """, unsafe_allow_html=True)
 
-        with st.expander("▶️ Watch Official Trailer for Selected Film"):
-            st.video(source_movie.get("trailer_url") or "")
+        render_movie_trailer(source_movie, "selected_seed")
 
         st.markdown("---")
         st.markdown(f"### 🍿 **Top Kinship Matches for *{selected_movie_title}***")
@@ -1363,8 +1497,7 @@ with tab_roulette:
             </div>
             """, unsafe_allow_html=True)
 
-            with st.expander("▶️ Watch Official Trailer Right Here", expanded=True):
-                st.video(chosen.get("trailer_url") or "")
+            render_movie_trailer(chosen, "roulette_selection")
 
             b_save, b_spin = st.columns(2)
             with b_save:
