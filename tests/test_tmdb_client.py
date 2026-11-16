@@ -136,6 +136,30 @@ class TMDBClientTests(unittest.TestCase):
             timeout=12,
         )
 
+    def test_release_year_movies_use_discover_date_range(self):
+        client = TMDBClient("test-key")
+        response = Mock()
+        response.json.return_value = {"results": [{"id": 42, "title": "A Movie"}]}
+        response.raise_for_status.return_value = None
+        client.session.get = Mock(return_value=response)
+
+        results = client.get_movies_by_release_year(2026, page=2)
+
+        self.assertEqual(results, [{"id": 42, "title": "A Movie"}])
+        client.session.get.assert_called_once_with(
+            "https://api.themoviedb.org/3/discover/movie",
+            params={
+                "api_key": "test-key",
+                "page": 2,
+                "include_adult": "false",
+                "include_video": "false",
+                "sort_by": "popularity.desc",
+                "primary_release_date.gte": "2026-01-01",
+                "primary_release_date.lte": "2026-12-31",
+            },
+            timeout=12,
+        )
+
     def test_filter_movie_results_applies_genre_rating_and_year(self):
         movies = [
             {"id": 1, "vote_average": 8.0, "release_date": "2024-01-01", "genre_ids": [878]},

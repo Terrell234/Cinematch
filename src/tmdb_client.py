@@ -151,6 +151,22 @@ class TMDBClient:
             },
         ).get("results", [])
 
+    def get_movies_by_release_year(
+        self, year: int, page: int = 1
+    ) -> list[dict[str, Any]]:
+        """Return TMDB movies with a primary release date in the requested year."""
+        return self._get(
+            "discover/movie",
+            {
+                "page": page,
+                "include_adult": "false",
+                "include_video": "false",
+                "sort_by": "popularity.desc",
+                "primary_release_date.gte": f"{year}-01-01",
+                "primary_release_date.lte": f"{year}-12-31",
+            },
+        ).get("results", [])
+
     def get_movie_recommendations(self, tmdb_id: int | str, page: int = 1) -> list[dict[str, Any]]:
         return self._get(f"movie/{tmdb_id}/recommendations", {"page": page}).get("results", [])
 

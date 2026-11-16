@@ -21,6 +21,7 @@ load_dotenv(os.path.expanduser("~/.env"))
 
 from src.data_loader import (
     add_movie_to_dataset,
+    add_movies_to_dataset,
     get_recommender,
     load_movie_data,
 )
@@ -1614,10 +1615,10 @@ with tab_tmdb:
     else:
         with st.expander("📈 Expand the recommendation catalog with TMDB", expanded=True):
             st.write(
-                "Import popular TMDB movies into the local catalog so they become available "
+                "Import popular TMDB movies or 2026 releases into the local catalog so they become available "
                 "in the movie matcher, filters, and watchlist recommendations."
             )
-            import_col, action_col = st.columns([1, 2])
+            import_col, source_col, action_col = st.columns([1, 1, 2])
             with import_col:
                 import_count = st.selectbox(
                     "Movies to add (maximum)",
@@ -1625,12 +1626,18 @@ with tab_tmdb:
                     index=3,
                     key="tmdb_import_count",
                 )
+            with source_col:
+                import_source = st.selectbox(
+                    "TMDB collection",
+                    options=["Popular movies", "2026 releases"],
+                    key="tmdb_import_source",
+                )
             with action_col:
                 st.caption(
                     f"Current catalog: **{len(df)}** movies. Already-listed titles are skipped."
                 )
                 if st.button(
-                    f"Add up to {import_count} popular movies",
+                    f"Add up to {import_count} {import_source.lower()}",
                     type="primary",
                     key="tmdb_bulk_import",
                 ):
@@ -1638,9 +1645,14 @@ with tab_tmdb:
                     known_titles = set(df["title"].str.casefold())
                     max_pages = (import_count // 20) * 2
                     try:
-                        with st.spinner("Loading popular movies from TMDB..."):
+                        with st.spinner(f"Loading {import_source.lower()} from TMDB..."):
                             for page in range(1, max_pages + 1):
-                                page_movies = tmdb.get_popular_movies(page=page)
+                                if import_source == "2026 releases":
+                                    page_movies = tmdb.get_movies_by_release_year(
+                                        2026, page=page
+                                    )
+                                else:
+                                    page_movies = tmdb.get_popular_movies(page=page)
                                 if not page_movies:
                                     break
                                 for item in page_movies:
@@ -1656,9 +1668,7 @@ with tab_tmdb:
                                         break
                                 if len(new_movies) >= import_count:
                                     break
-                            added_count = sum(
-                                add_movie_to_dataset(movie) for movie in new_movies
-                            )
+                            added_count = add_movies_to_dataset(new_movies)
                         if added_count:
                             st.success(
                                 f"Added {added_count} movies. The catalog now has "
