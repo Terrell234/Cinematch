@@ -25,7 +25,7 @@ Open [http://localhost:8501](http://localhost:8501). The bundled CSV contains th
    TMDB_API_KEY = "your-tmdb-api-key"
    ```
 
-   The TMDB integration is optional; the curated catalog and recommendation features work without a key. You can also enter a key in the app sidebar for the current session.
+   The TMDB integration is optional; the curated catalog and recommendation features work without a key. You can also enter a key in the app's **Configure TMDB API key** panel for the current session.
 
 For local development, copy `.env.example` to `.env` and set `TMDB_API_KEY` there. Keep API credentials out of GitHub: `.env` and Streamlit's `secrets.toml` are excluded by `.gitignore`.
 
@@ -36,3 +36,5 @@ For local development, copy `.env.example` to `.env` and set `TMDB_API_KEY` ther
 - `python enrich_with_tmdb.py` and `python fetch_backdrops.py` optionally enrich catalog artwork using TMDB.
 
 Movies imported through the live TMDB browser are written to the app's local catalog. Streamlit Community Cloud's filesystem is ephemeral, so those imports are not a permanent replacement for updating and pushing the CSV in the GitHub repository.
+
+With `TMDB_API_KEY` configured, use **TMDB Live Discovery → Expand the recommendation catalog with TMDB** to import up to 100 popular titles at a time. Existing titles are skipped. Cloud imports are temporary; add desired titles to `data/movies.csv` and push the updated file to keep them across redeployments.

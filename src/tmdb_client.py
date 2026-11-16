@@ -47,7 +47,7 @@ class TMDBClient:
         53: "Thriller",
         80: "Crime",
         99: "Documentary",
-        878: "Science Fiction",
+        878: "Sci-Fi",
         9648: "Mystery",
         10402: "Music",
         10749: "Romance",
@@ -117,6 +117,18 @@ class TMDBClient:
 
     def get_top_rated(self, page: int = 1) -> list[dict[str, Any]]:
         return self._get("movie/top_rated", {"page": page}).get("results", [])
+
+    def get_popular_movies(self, page: int = 1) -> list[dict[str, Any]]:
+        return self._get(
+            "discover/movie",
+            {
+                "page": page,
+                "sort_by": "popularity.desc",
+                "include_adult": "false",
+                "include_video": "false",
+                "vote_count.gte": 50,
+            },
+        ).get("results", [])
 
     def get_movie_recommendations(self, tmdb_id: int | str, page: int = 1) -> list[dict[str, Any]]:
         return self._get(f"movie/{tmdb_id}/recommendations", {"page": page}).get("results", [])

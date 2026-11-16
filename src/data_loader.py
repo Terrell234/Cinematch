@@ -56,26 +56,38 @@ def get_recommender() -> "MovieRecommender":
 
 def add_movie_to_dataset(movie: dict[str, Any]) -> bool:
     """Append one movie to the local catalog; return False for duplicates."""
+    return add_movies_to_dataset([movie]) > 0
+
+
+def add_movies_to_dataset(movies: list[dict[str, Any]]) -> int:
+    """Append unique titled movies in one write and return the number added."""
     frame = load_movie_data().copy()
-    title = str(movie.get("title", "")).strip()
-    if not title:
-        raise ValueError("Cannot add a movie without a title.")
-    if frame["title"].str.casefold().eq(title.casefold()).any():
-        return False
+    existing_titles = set(frame["title"].str.casefold())
+    next_id = int(pd.to_numeric(frame["id"], errors="coerce").max() or 0) + 1
+    rows = []
 
-    row = {column: "" for column in frame.columns}
-    row.update(movie)
-    row["title"] = title
-    row["id"] = int(pd.to_numeric(frame["id"], errors="coerce").max() or 0) + 1
-    row.setdefault("year", 0)
-    row.setdefault("rating", 0)
-    row.setdefault("votes", 0)
-    row.setdefault("runtime", 0)
+    for movie in movies:
+        title = str(movie.get("title", "")).strip()
+        if not title:
+            raise ValueError("Cannot add a movie without a title.")
+        if title.casefold() in existing_titles:
+            continue
 
-    updated = pd.concat([frame, pd.DataFrame([row])], ignore_index=True)
+        row = {column: "" for column in frame.columns}
+        row.update(movie)
+        row["id"] = next_id
+        row["title"] = title
+        rows.append(row)
+        existing_titles.add(title.casefold())
+        next_id += 1
+
+    if not rows:
+        return 0
+
+    updated = pd.concat([frame, pd.DataFrame(rows)], ignore_index=True)
     updated.to_csv(DATA_PATH, index=False)
     load_movie_data.clear()
-    return True
+    return len(rows)
 
 
 class MovieRecommender:

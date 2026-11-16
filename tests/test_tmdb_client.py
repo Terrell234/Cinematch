@@ -22,6 +22,30 @@ class TMDBClientTests(unittest.TestCase):
             timeout=12,
         )
 
+    def test_popular_movies_use_discover_endpoint(self):
+        client = TMDBClient("test-key")
+        response = Mock()
+        response.json.return_value = {"results": [{"id": 42, "title": "A Movie"}]}
+        response.raise_for_status.return_value = None
+
+        client.session.get = Mock(return_value=response)
+
+        results = client.get_popular_movies(page=3)
+
+        self.assertEqual(results, [{"id": 42, "title": "A Movie"}])
+        client.session.get.assert_called_once_with(
+            "https://api.themoviedb.org/3/discover/movie",
+            params={
+                "api_key": "test-key",
+                "page": 3,
+                "sort_by": "popularity.desc",
+                "include_adult": "false",
+                "include_video": "false",
+                "vote_count.gte": 50,
+            },
+            timeout=12,
+        )
+
     def test_filter_movie_results_applies_genre_rating_and_year(self):
         movies = [
             {"id": 1, "vote_average": 8.0, "release_date": "2024-01-01", "genre_ids": [878]},
@@ -50,7 +74,7 @@ class TMDBClientTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(movie["genres"], "Science Fiction, Adventure")
+        self.assertEqual(movie["genres"], "Sci-Fi, Adventure")
         self.assertEqual(movie["year"], 2024)
         self.assertEqual(movie["runtime"], 0)
 

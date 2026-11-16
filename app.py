@@ -18,7 +18,12 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 load_dotenv(os.path.expanduser("~/.env"))
 
-from src.data_loader import load_movie_data, get_recommender, add_movie_to_dataset
+from src.data_loader import (
+    add_movie_to_dataset,
+    add_movies_to_dataset,
+    get_recommender,
+    load_movie_data,
+)
 from src.tmdb_client import TMDBClient
 
 # Page configuration
@@ -998,7 +1003,62 @@ with tab_tmdb:
     )
 
     if not tmdb.is_configured:
-        st.info("Add a TMDB API key in the sidebar to browse live movies and recommendations.")
+        st.info("Add `TMDB_API_KEY` in Streamlit Cloud Settings → Secrets to expand the catalog with TMDB movies.")
+    else:
+        with st.expander("📈 Expand the recommendation catalog with TMDB", expanded=True):
+            st.write(
+                "Import popular TMDB movies into the local catalog so they become available "
+                "in the movie matcher, filters, and watchlist recommendations."
+            )
+            import_col, action_col = st.columns([1, 2])
+            with import_col:
+                import_count = st.selectbox(
+                    "Movies to add (maximum)",
+                    options=[20, 40, 60, 100],
+                    index=3,
+                    key="tmdb_import_count",
+                )
+            with action_col:
+                st.caption(
+                    f"Current catalog: **{len(df)}** movies. Already-listed titles are skipped."
+                )
+                if st.button(
+                    f"Add up to {import_count} popular movies",
+                    type="primary",
+                    key="tmdb_bulk_import",
+                ):
+                    new_movies = []
+                    known_titles = set(df["title"].str.casefold())
+                    max_pages = (import_count // 20) * 2
+                    try:
+                        with st.spinner("Loading popular movies from TMDB..."):
+                            for page in range(1, max_pages + 1):
+                                page_movies = tmdb.get_popular_movies(page=page)
+                                if not page_movies:
+                                    break
+                                for item in page_movies:
+                                    formatted = tmdb.format_tmdb_movie(item)
+                                    title = formatted["title"].strip()
+                                    if title.casefold() in known_titles:
+                                        continue
+                                    known_titles.add(title.casefold())
+                                    new_movies.append(formatted)
+                                    if len(new_movies) >= import_count:
+                                        break
+                                if len(new_movies) >= import_count:
+                                    break
+                            added_count = add_movies_to_dataset(new_movies)
+                        if added_count:
+                            st.success(
+                                f"Added {added_count} movies. The catalog now has "
+                                f"{len(df) + added_count} titles."
+                            )
+                            st.rerun()
+                        st.info(
+                            "TMDB returned no new titles for this import. Try again later."
+                        )
+                    except requests.RequestException as error:
+                        st.error(f"Could not expand the catalog from TMDB: {error}")
 
     tmdb_results = []
     if tmdb_mode == "🎯 Recommendations for a Movie":
