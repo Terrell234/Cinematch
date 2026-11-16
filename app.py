@@ -3,13 +3,16 @@ Featuring cutting-edge streaming UI, vibrant neon aesthetics, widescreen backdro
 content-based ML, Cinema Blend alchemy, visual mood matching, and live TMDB sync.
 """
 
+import json
 import os
 import random
+import time
 from datetime import date
 from urllib.parse import parse_qs, quote_plus, urlparse
 
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -25,6 +28,7 @@ from src.data_loader import (
     get_recommender,
     load_movie_data,
 )
+from src.account_store import AccountStoreError, SupabaseAccountStore
 from src.tmdb_client import TMDBClient
 
 # Page configuration
@@ -306,8 +310,17 @@ st.markdown("""
 # Initialize Session State
 if "watchlist" not in st.session_state:
     st.session_state["watchlist"] = []
+if "account_session" not in st.session_state:
+    st.session_state["account_session"] = None
 if "selected_movie_for_search" not in st.session_state:
     st.session_state["selected_movie_for_search"] = "Inception"
+if st.session_state.pop("clear_account_password_fields", False):
+    for password_key in (
+        "account_login_password",
+        "account_signup_password",
+        "account_signup_confirm",
+    ):
+        st.session_state.pop(password_key, None)
 
 try:
     secret_key = str(
@@ -336,6 +349,220 @@ except Exception as e:
 
 # Initialize TMDB Client
 tmdb = TMDBClient(api_key_or_token=st.session_state.get("tmdb_api_key", ""))
+
+
+def read_app_secret(name: str) -> str:
+    try:
+        value = st.secrets.get(name, "")
+    except FileNotFoundError:
+        value = ""
+    return str(value or os.environ.get(name, "")).strip()
+
+
+supabase_url = read_app_secret("SUPABASE_URL")
+supabase_anon_key = read_app_secret("SUPABASE_ANON_KEY")
+supabase_redirect_url = read_app_secret("SUPABASE_REDIRECT_URL")
+supabase_oauth_state_secret = read_app_secret("SUPABASE_OAUTH_STATE_SECRET")
+account_config_error = None
+try:
+    account_store = (
+        SupabaseAccountStore(supabase_url, supabase_anon_key)
+        if supabase_url and supabase_anon_key
+        else None
+    )
+except AccountStoreError as error:
+    account_store = None
+    account_config_error = str(error)
+github_oauth_configured = bool(
+    account_store and supabase_redirect_url and supabase_oauth_state_secret
+)
+github_oauth_cookie = "cinematch_github_oauth_nonce"
+if github_oauth_configured and not st.session_state.get("account_session"):
+    oauth_request = st.session_state.get("github_oauth_request")
+    if not oauth_request or oauth_request.get("expires_at", 0) <= int(time.time()) + 60:
+        try:
+            authorization_url, nonce = account_store.create_github_oauth_request(
+                supabase_redirect_url,
+                supabase_oauth_state_secret,
+            )
+        except AccountStoreError as error:
+            account_config_error = str(error)
+        else:
+            st.session_state["github_oauth_request"] = {
+                "authorization_url": authorization_url,
+                "nonce": nonce,
+                "expires_at": int(time.time()) + 600,
+            }
+
+
+def clear_account_session() -> None:
+    st.session_state["account_session"] = None
+    st.session_state["watchlist"] = []
+    st.session_state["watchlist_user_id"] = None
+    st.session_state["watchlist_loaded"] = False
+
+
+def process_github_oauth_callback() -> None:
+    code = str(st.query_params.get("code") or "")
+    encrypted_state = str(st.query_params.get("oauth_state") or "")
+    oauth_error = str(
+        st.query_params.get("error")
+        or st.query_params.get("error_description")
+        or ""
+    )
+    if not (code or encrypted_state or oauth_error):
+        return
+
+    try:
+        if oauth_error:
+            raise AccountStoreError("GitHub sign-in was canceled or rejected.")
+        if account_store is None or not github_oauth_configured:
+            raise AccountStoreError("GitHub sign-in is not configured.")
+        session = account_store.exchange_github_oauth_code(
+            auth_code=code,
+            encrypted_state=encrypted_state,
+            browser_nonce=st.context.cookies.get(github_oauth_cookie, ""),
+            state_secret=supabase_oauth_state_secret,
+        )
+    except AccountStoreError as error:
+        st.session_state["account_message"] = f"GitHub sign-in failed: {error}"
+    else:
+        st.session_state["account_session"] = session
+        st.session_state["watchlist_loaded"] = False
+        st.session_state["account_message"] = "Signed in with GitHub."
+    finally:
+        st.session_state["github_oauth_request"] = None
+        st.query_params.clear()
+        cookie = (
+            f"{github_oauth_cookie}=; Path=/; Max-Age=0; SameSite=Lax"
+            + ("; Secure" if supabase_redirect_url.startswith("https://") else "")
+        )
+        components.html(
+            f"<script>window.parent.document.cookie = {json.dumps(cookie)};</script>",
+            height=0,
+        )
+
+
+def finish_auth_attempt(message: str | None = None) -> None:
+    if message:
+        st.session_state["account_message"] = message
+    st.session_state["clear_account_password_fields"] = True
+    st.rerun()
+
+
+def log_out_account() -> None:
+    logout_error = None
+    if account_store and account_session:
+        try:
+            account_store.sign_out(account_session["access_token"])
+        except (AccountStoreError, KeyError) as error:
+            logout_error = str(error)
+    clear_account_session()
+    if logout_error:
+        st.session_state["account_message"] = (
+            "Signed out locally, but the account service could not revoke the "
+            f"remote session: {logout_error}"
+        )
+    st.rerun()
+
+
+def load_account_watchlist() -> tuple[dict | None, bool, str | None]:
+    session = st.session_state.get("account_session")
+    if not session:
+        st.session_state["watchlist"] = []
+        st.session_state["watchlist_loaded"] = False
+        st.session_state["watchlist_user_id"] = None
+        return None, False, None
+    if account_store is None:
+        clear_account_session()
+        return None, False, "Supabase account settings are missing."
+
+    if int(session.get("expires_at") or 0) <= int(time.time()) + 60:
+        try:
+            session = account_store.refresh_session(session["refresh_token"])
+        except (AccountStoreError, KeyError) as error:
+            clear_account_session()
+            return None, False, f"Your account session expired. Please sign in again. {error}"
+        st.session_state["account_session"] = session
+
+    user_id = session["user_id"]
+    needs_load = (
+        not st.session_state.get("watchlist_loaded")
+        or st.session_state.get("watchlist_user_id") != user_id
+    )
+    if needs_load:
+        try:
+            st.session_state["watchlist"] = account_store.get_watchlist(session)
+        except AccountStoreError as error:
+            st.session_state["watchlist_loaded"] = False
+            return session, False, str(error)
+        st.session_state["watchlist_user_id"] = user_id
+        st.session_state["watchlist_loaded"] = True
+    return session, True, None
+
+
+account_session, watchlist_ready, account_error = load_account_watchlist()
+
+
+def is_movie_saved(movie: dict) -> bool:
+    if account_store is None:
+        return False
+    movie_id = account_store.movie_id(movie)
+    return any(
+        account_store.movie_id(saved) == movie_id
+        for saved in st.session_state["watchlist"]
+    )
+
+
+def save_watchlist_movie(movie: dict) -> None:
+    if account_store is None or account_session is None or not watchlist_ready:
+        st.error("Sign in to a configured account to save movies.")
+        return
+    try:
+        account_store.save_movie(account_session, movie)
+    except AccountStoreError as error:
+        st.error(f"Could not save this movie: {error}")
+        return
+    if not is_movie_saved(movie):
+        st.session_state["watchlist"].append(movie)
+    st.toast("Added to your saved watchlist.")
+    st.rerun()
+
+
+def remove_watchlist_movie(movie: dict) -> None:
+    if account_store is None or account_session is None or not watchlist_ready:
+        st.error("Sign in to a configured account to update your watchlist.")
+        return
+    try:
+        account_store.remove_movie(account_session, movie)
+    except AccountStoreError as error:
+        st.error(f"Could not remove this movie: {error}")
+        return
+    movie_id = account_store.movie_id(movie)
+    st.session_state["watchlist"] = [
+        saved
+        for saved in st.session_state["watchlist"]
+        if account_store.movie_id(saved) != movie_id
+    ]
+    st.toast("Removed from your saved watchlist.")
+    st.rerun()
+
+
+def clear_watchlist() -> None:
+    if account_store is None or account_session is None or not watchlist_ready:
+        st.error("Sign in to a configured account to update your watchlist.")
+        return
+    try:
+        account_store.clear_watchlist(account_session)
+    except AccountStoreError as error:
+        st.error(f"Could not clear your watchlist: {error}")
+        return
+    st.session_state["watchlist"] = []
+    st.toast("Your watchlist has been cleared.")
+    st.rerun()
+
+
+process_github_oauth_callback()
 
 
 def show_tmdb_error(action: str, error: requests.RequestException) -> None:
@@ -435,6 +662,129 @@ if search_submitted:
         st.info("Recommendations use the local catalog. Add a TMDB key to retrieve live movie details.")
 
 search_query = st.session_state["catalog_search"]
+
+# -------------------------------------------------------------
+# ACCOUNT ACCESS
+# -------------------------------------------------------------
+account_message = st.session_state.pop("account_message", None)
+header_space, account_column = st.columns([8, 1])
+with account_column:
+    with st.popover("👤 Account"):
+        if account_store is None:
+            if account_config_error:
+                st.error(account_config_error)
+            else:
+                st.info(
+                    "Accounts require `SUPABASE_URL` and `SUPABASE_ANON_KEY` in Streamlit Secrets."
+                )
+        elif account_session:
+            if watchlist_ready:
+                st.caption(f"Signed in as **{account_session.get('email') or 'CineMatch user'}**")
+            else:
+                st.warning("Your account is signed in, but the watchlist is unavailable.")
+                if account_error:
+                    st.error(account_error)
+                if st.button("Retry watchlist", key="account_retry_watchlist"):
+                    st.rerun()
+            if st.button("Log out", key="account_logout", use_container_width=True):
+                log_out_account()
+        else:
+            oauth_request = st.session_state.get("github_oauth_request")
+            if github_oauth_configured and oauth_request:
+                cookie = (
+                    f"{github_oauth_cookie}={oauth_request['nonce']}; "
+                    "Path=/; Max-Age=600; SameSite=Lax"
+                    + ("; Secure" if supabase_redirect_url.startswith("https://") else "")
+                )
+                components.html(
+                    f"<script>window.parent.document.cookie = {json.dumps(cookie)};</script>",
+                    height=0,
+                )
+                st.link_button(
+                    "Continue with GitHub",
+                    href=oauth_request["authorization_url"],
+                    type="primary",
+                )
+                st.caption("Or use an email and password:")
+            elif github_oauth_configured:
+                st.error(account_config_error or "Could not prepare GitHub sign-in.")
+            elif account_store:
+                st.info(
+                    "GitHub sign-in needs `SUPABASE_REDIRECT_URL` and "
+                    "`SUPABASE_OAUTH_STATE_SECRET` in Streamlit Secrets."
+                )
+            if account_error:
+                st.warning(account_error)
+            auth_mode = st.radio(
+                "Choose an account action",
+                options=["Log in", "Sign up"],
+                horizontal=True,
+                key="account_auth_mode",
+            )
+            if auth_mode == "Log in":
+                with st.form("account_login_form"):
+                    login_email = st.text_input("Email address", key="account_login_email")
+                    login_password = st.text_input(
+                        "Password",
+                        type="password",
+                        key="account_login_password",
+                    )
+                    login_submitted = st.form_submit_button(
+                        "Log in",
+                        type="primary",
+                        use_container_width=True,
+                    )
+                if login_submitted:
+                    try:
+                        signed_in = account_store.sign_in(login_email.strip(), login_password)
+                    except AccountStoreError as error:
+                        finish_auth_attempt(str(error))
+                    else:
+                        st.session_state["account_session"] = signed_in
+                        st.session_state["watchlist_loaded"] = False
+                        finish_auth_attempt()
+            else:
+                with st.form("account_signup_form"):
+                    signup_email = st.text_input("Email address", key="account_signup_email")
+                    signup_password = st.text_input(
+                        "Password (at least 8 characters)",
+                        type="password",
+                        key="account_signup_password",
+                    )
+                    confirm_password = st.text_input(
+                        "Confirm password",
+                        type="password",
+                        key="account_signup_confirm",
+                    )
+                    signup_submitted = st.form_submit_button(
+                        "Create account",
+                        type="primary",
+                        use_container_width=True,
+                    )
+                if signup_submitted:
+                    if len(signup_password) < 8:
+                        finish_auth_attempt("Choose a password with at least 8 characters.")
+                    elif signup_password != confirm_password:
+                        finish_auth_attempt("The passwords do not match.")
+                    else:
+                        try:
+                            signed_up = account_store.sign_up(
+                                signup_email.strip(),
+                                signup_password,
+                            )
+                        except AccountStoreError as error:
+                            finish_auth_attempt(str(error))
+                        else:
+                            if signed_up:
+                                st.session_state["account_session"] = signed_up
+                                st.session_state["watchlist_loaded"] = False
+                                finish_auth_attempt()
+                            else:
+                                finish_auth_attempt(
+                                    "Account created. Check your email to confirm it, then log in."
+                                )
+if account_message:
+    st.warning(account_message)
 
 # -------------------------------------------------------------
 # HERO MARQUEE BANNER
@@ -859,17 +1209,31 @@ def render_cinema_card(
         # Action Buttons Row
         b_col1, b_col2 = st.columns(2)
         with b_col1:
-            is_saved = any(item["title"].lower() == title.lower() for item in st.session_state["watchlist"])
+            is_saved = is_movie_saved(movie)
             if is_saved:
-                if st.button("✅ Saved", key=f"unsave_{key_prefix}_{m_id}", use_container_width=True):
-                    st.session_state["watchlist"] = [item for item in st.session_state["watchlist"] if item["title"].lower() != title.lower()]
-                    st.toast(f"Removed '{title}' from Watchlist.")
-                    st.rerun()
+                if st.button(
+                    "✅ Saved",
+                    key=f"unsave_{key_prefix}_{m_id}",
+                    use_container_width=True,
+                    disabled=not watchlist_ready,
+                ):
+                    remove_watchlist_movie(movie)
             else:
-                if st.button("⭐ Watchlist", key=f"save_{key_prefix}_{m_id}", use_container_width=True):
-                    st.session_state["watchlist"].append(movie)
-                    st.toast(f"Added '{title}' to Watchlist! ⭐")
-                    st.rerun()
+                save_label = (
+                    "⭐ Watchlist"
+                    if watchlist_ready
+                    else "🔒 Sign in to save"
+                    if account_session is None
+                    else "🔒 Watchlist unavailable"
+                )
+                if st.button(
+                    save_label,
+                    key=f"save_{key_prefix}_{m_id}",
+                    use_container_width=True,
+                    disabled=not watchlist_ready,
+                    help=None if watchlist_ready else "Open Account at the top right to sign in.",
+                ):
+                    save_watchlist_movie(movie)
 
         with b_col2:
             if show_match_button:
@@ -1589,10 +1953,16 @@ with tab_roulette:
 
                 b_save, b_spin = st.columns(2)
                 with b_save:
-                    if st.button("⭐ Add to Watchlist", key="roulette_save_btn", use_container_width=True):
-                        st.session_state["watchlist"].append(chosen)
-                        st.toast("Saved to Watchlist! ⭐")
-                        st.rerun()
+                    if st.button(
+                        "⭐ Add to Watchlist"
+                        if watchlist_ready
+                        else "🔒 Sign in to save",
+                        key="roulette_save_btn",
+                        use_container_width=True,
+                        disabled=not watchlist_ready,
+                        help=None if watchlist_ready else "Open Account at the top right to sign in.",
+                    ):
+                        save_watchlist_movie(chosen)
                 with b_spin:
                     if st.button("🔄 Spin Again", key="roulette_spin_again", use_container_width=True):
                         st.rerun()
@@ -1822,7 +2192,11 @@ with tab_watchlist:
     st.subheader(f"⭐ My Cinema Watchlist ({len(watchlist)} Films with posters)")
     st.write("Your personal collection of saved films. Generate personalized recommendations based on your collective taste profile.")
 
-    if not saved_watchlist:
+    if account_session is None:
+        st.info("Log in or create an account from the top-right Account menu to access your private watchlist.")
+    elif not watchlist_ready:
+        st.error(account_error or "Your private watchlist could not be loaded.")
+    elif not saved_watchlist:
         st.info("Your watchlist is empty! Click **⭐ Watchlist** on any movie card in the app to save it here.")
     elif not watchlist:
         if not tmdb.is_configured:
@@ -1858,8 +2232,7 @@ with tab_watchlist:
             st.download_button("📥 Export CSV", csv_data, "my_watchlist.csv", "text/csv", use_container_width=True)
         with w_bar3:
             if st.button("🗑️ Clear Watchlist", use_container_width=True):
-                st.session_state["watchlist"] = []
-                st.rerun()
+                clear_watchlist()
 
         st.markdown("---")
         st.markdown("### 📋 Saved Films:")
