@@ -692,7 +692,7 @@ with account_column:
                 )
                 st.link_button(
                     "Continue with Google",
-                    href=oauth_request["authorization_url"],
+                    oauth_request["authorization_url"],
                     type="primary",
                 )
                 st.caption(
