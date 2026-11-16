@@ -1,197 +1,315 @@
-import base64
-import hashlib
 import json
+import time
 import unittest
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlparse
 
 from requests import HTTPError
 
-from src.account_store import AccountStoreError, SupabaseAccountStore
+from src.account_store import AccountStoreError, GitHubGistAccountStore
 
 
-class SupabaseAccountStoreTests(unittest.TestCase):
+class GitHubGistAccountStoreTests(unittest.TestCase):
     def setUp(self):
-        self.store = SupabaseAccountStore("https://example.supabase.co/", "anon-key")
+        self.store = GitHubGistAccountStore("client-id", "client-secret")
         self.session = {
             "access_token": "user-access-token",
-            "refresh_token": "refresh-token",
             "expires_at": 1_900_000_000,
-            "user_id": "user-123",
-            "email": "movie.fan@example.com",
+            "user_id": "42",
+            "login": "movie-fan",
         }
 
     @staticmethod
     def response(payload, status_code=200):
         response = Mock()
         response.status_code = status_code
-        response.content = b"response"
+        response.content = json.dumps(payload).encode()
         response.json.return_value = payload
         response.raise_for_status.return_value = None
         return response
 
+    def test_oauth_request_uses_gist_scope_and_csrf_state(self):
+        url = self.store.create_github_oauth_request(
+            "https://cinematch.example",
+            "one-time-state",
+        )
+        params = parse_qs(urlparse(url).query)
+
+        self.assertEqual(urlparse(url).netloc, "github.com")
+        self.assertEqual(params["client_id"], ["client-id"])
+        self.assertEqual(params["redirect_uri"], ["https://cinematch.example"])
+        self.assertEqual(params["scope"], ["gist"])
+        self.assertEqual(params["state"], ["one-time-state"])
+
+    def test_oauth_request_rejects_non_https_redirect(self):
+        with self.assertRaisesRegex(AccountStoreError, "HTTPS"):
+            self.store.create_github_oauth_request(
+                "http://cinematch.example",
+                "one-time-state",
+            )
+
+    def test_oauth_state_requires_matching_browser_and_unexpired_state(self):
+        expires_at = int(time.time()) + 600
+
+        GitHubGistAccountStore.validate_github_oauth_state(
+            "state-123",
+            "state-123",
+            "state-123",
+            expires_at,
+        )
+        GitHubGistAccountStore.validate_github_oauth_state(
+            "state-123",
+            "",
+            "state-123",
+            0,
+        )
+        with self.assertRaisesRegex(AccountStoreError, "state is invalid or expired"):
+            GitHubGistAccountStore.validate_github_oauth_state(
+                "state-123",
+                "different-state",
+                "state-123",
+                expires_at,
+            )
+        with self.assertRaisesRegex(AccountStoreError, "state is invalid or expired"):
+            GitHubGistAccountStore.validate_github_oauth_state(
+                "state-123",
+                "state-123",
+                "state-123",
+                int(time.time()) - 1,
+            )
+        with self.assertRaisesRegex(AccountStoreError, "state is invalid or expired"):
+            GitHubGistAccountStore.validate_github_oauth_state(
+                "state-123",
+                "",
+                "other-state",
+                0,
+            )
+
     @patch("src.account_store.requests.request")
-    def test_sign_in_returns_user_session(self, request):
+    def test_code_exchange_returns_github_user_session(self, request):
+        request.side_effect = [
+            self.response(
+                {
+                    "access_token": "access",
+                    "refresh_token": "refresh",
+                    "expires_in": 3600,
+                    "scope": "gist",
+                }
+            ),
+            self.response({"id": 42, "login": "movie-fan"}),
+        ]
+
+        session = self.store.exchange_github_oauth_code(
+            "one-time-code",
+            "one-time-state",
+            "https://cinematch.example",
+        )
+
+        self.assertEqual(session["user_id"], "42")
+        self.assertEqual(session["login"], "movie-fan")
+        self.assertEqual(session["access_token"], "access")
+        self.assertEqual(session["refresh_token"], "refresh")
+        exchange_call, profile_call = request.call_args_list
+        self.assertEqual(
+            exchange_call.args[:2],
+            (
+                "POST",
+                "https://github.com/login/oauth/access_token",
+            ),
+        )
+        self.assertEqual(
+            exchange_call.kwargs["data"],
+            {
+                "client_id": "client-id",
+                "client_secret": "client-secret",
+                "code": "one-time-code",
+                "redirect_uri": "https://cinematch.example",
+                "state": "one-time-state",
+            },
+        )
+        self.assertEqual(
+            exchange_call.kwargs["headers"]["Content-Type"],
+            "application/x-www-form-urlencoded",
+        )
+        self.assertEqual(
+            exchange_call.kwargs["headers"]["Accept"],
+            "application/json",
+        )
+        self.assertEqual(profile_call.args[:2], ("GET", "https://api.github.com/user"))
+        self.assertEqual(
+            profile_call.kwargs["headers"]["Authorization"],
+            "Bearer access",
+        )
+
+    @patch("src.account_store.requests.request")
+    def test_code_exchange_rejects_token_without_gist_scope(self, request):
+        request.return_value = self.response({"access_token": "access", "scope": ""})
+
+        with self.assertRaisesRegex(AccountStoreError, "Gist permission"):
+            self.store.exchange_github_oauth_code(
+                "one-time-code",
+                "one-time-state",
+                "https://cinematch.example",
+            )
+
+        request.assert_called_once()
+
+    @patch("src.account_store.requests.request")
+    def test_expiring_github_session_can_be_refreshed(self, request):
         request.return_value = self.response(
             {
-                "access_token": "access",
-                "refresh_token": "refresh",
+                "access_token": "new-access",
+                "refresh_token": "new-refresh",
                 "expires_in": 3600,
-                "user": {"id": "user-123", "email": "movie.fan@example.com"},
             }
         )
 
-        result = self.store.sign_in("movie.fan@example.com", "password")
-
-        self.assertEqual(result["user_id"], "user-123")
-        self.assertEqual(result["email"], "movie.fan@example.com")
-        self.assertEqual(result["access_token"], "access")
-        call = request.call_args
-        self.assertEqual(call.args[:2], ("POST", "https://example.supabase.co/auth/v1/token?grant_type=password"))
-        self.assertEqual(call.kwargs["headers"]["apikey"], "anon-key")
-        self.assertEqual(call.kwargs["json"], {"email": "movie.fan@example.com", "password": "password"})
-
-    def test_signup_without_email_confirmation_session_returns_none(self):
-        with patch.object(self.store, "_request", return_value={"user": {"id": "user-123"}}):
-            self.assertIsNone(self.store.sign_up("movie.fan@example.com", "password"))
-
-    def test_account_service_requires_https(self):
-        with self.assertRaisesRegex(AccountStoreError, "HTTPS"):
-            SupabaseAccountStore("http://example.supabase.co", "anon-key")
-
-    def test_account_service_rejects_service_role_key(self):
-        payload = base64.urlsafe_b64encode(
-            json.dumps({"role": "service_role"}).encode()
-        ).decode().rstrip("=")
-        service_role_key = f"header.{payload}.signature"
-
-        with self.assertRaisesRegex(AccountStoreError, "never the service_role key"):
-            SupabaseAccountStore("https://example.supabase.co", service_role_key)
-
-    def test_github_oauth_request_uses_pkce_and_encrypted_callback_state(self):
-        authorization_url, nonce = self.store.create_github_oauth_request(
-            "https://cinematch.example",
-            "test state encryption secret",
+        session = self.store.refresh_session(
+            {
+                **self.session,
+                "access_token": "old-access",
+                "refresh_token": "old-refresh",
+            }
         )
-        auth_params = parse_qs(urlparse(authorization_url).query)
-        callback_params = parse_qs(urlparse(auth_params["redirect_to"][0]).query)
-        encrypted_state = callback_params["oauth_state"][0]
 
-        self.assertEqual(auth_params["provider"], ["github"])
-        self.assertEqual(auth_params["code_challenge_method"], ["s256"])
-        self.assertTrue(auth_params["code_challenge"][0])
-        self.assertTrue(encrypted_state)
-        self.assertTrue(nonce)
-
-        with patch.object(
-            self.store,
-            "_request",
-            return_value={
-                "access_token": "access",
-                "refresh_token": "refresh",
-                "user": {"id": "user-123"},
-            },
-        ) as exchange:
-            session = self.store.exchange_github_oauth_code(
-                "one-time-code",
-                encrypted_state,
-                nonce,
-                "test state encryption secret",
-            )
-
-        verifier = exchange.call_args.kwargs["body"]["code_verifier"]
-        expected_challenge = base64.urlsafe_b64encode(
-            hashlib.sha256(verifier.encode()).digest()
-        ).decode().rstrip("=")
-        self.assertEqual(auth_params["code_challenge"], [expected_challenge])
-        self.assertEqual(exchange.call_args.args[:2], ("POST", "auth/v1/token?grant_type=pkce"))
+        self.assertEqual(session["access_token"], "new-access")
+        self.assertEqual(session["refresh_token"], "new-refresh")
+        self.assertEqual(session["login"], "movie-fan")
         self.assertEqual(
-            exchange.call_args.kwargs["body"],
-            {"auth_code": "one-time-code", "code_verifier": verifier},
+            request.call_args.kwargs["data"],
+            {
+                "client_id": "client-id",
+                "client_secret": "client-secret",
+                "grant_type": "refresh_token",
+                "refresh_token": "old-refresh",
+            },
         )
-        self.assertEqual(session["user_id"], "user-123")
-
-    def test_github_oauth_rejects_state_from_another_browser(self):
-        _, nonce = self.store.create_github_oauth_request(
-            "https://cinematch.example",
-            "test state encryption secret",
-        )
-        authorization_url, _ = self.store.create_github_oauth_request(
-            "https://cinematch.example",
-            "test state encryption secret",
-        )
-        state = parse_qs(urlparse(authorization_url).query)["redirect_to"][0]
-        encrypted_state = parse_qs(urlparse(state).query)["oauth_state"][0]
-
-        with patch.object(self.store, "_request") as exchange:
-            with self.assertRaisesRegex(AccountStoreError, "invalid or expired"):
-                self.store.exchange_github_oauth_code(
-                    "one-time-code",
-                    encrypted_state,
-                    nonce,
-                    "test state encryption secret",
-                )
-        exchange.assert_not_called()
 
     @patch("src.account_store.requests.request")
-    def test_watchlist_reads_only_current_user_rows_with_user_token(self, request):
-        request.return_value = self.response(
-            [{"movie_id": "tmdb:42", "movie_data": {"title": "A Movie"}}]
-        )
+    def test_watchlist_reads_matching_gist_with_user_token(self, request):
+        request.side_effect = [
+            self.response(
+                [
+                    {
+                        "id": "gist-1",
+                        "description": self.store.GIST_DESCRIPTION,
+                        "files": {self.store.WATCHLIST_FILENAME: {}},
+                    }
+                ]
+            ),
+            self.response(
+                {
+                    "id": "gist-1",
+                    "files": {
+                        self.store.WATCHLIST_FILENAME: {
+                            "content": json.dumps(
+                                {"version": 1, "movies": [{"title": "A Movie"}]}
+                            )
+                        }
+                    },
+                }
+            ),
+        ]
 
         result = self.store.get_watchlist(self.session)
 
         self.assertEqual(result, [{"title": "A Movie"}])
-        call = request.call_args
-        self.assertEqual(call.kwargs["headers"]["Authorization"], "Bearer user-access-token")
+        self.assertEqual(self.session["gist_id"], "gist-1")
+        list_call, gist_call = request.call_args_list
+        self.assertEqual(list_call.args[:2], ("GET", "https://api.github.com/gists"))
         self.assertEqual(
-            call.kwargs["params"]["user_id"],
-            "eq.user-123",
+            list_call.kwargs["headers"]["Authorization"],
+            "Bearer user-access-token",
         )
+        self.assertEqual(gist_call.args[1], "https://api.github.com/gists/gist-1")
 
     @patch("src.account_store.requests.request")
-    def test_save_uses_user_jwt_and_scoped_upsert(self, request):
-        request.return_value = self.response({}, status_code=201)
+    def test_save_creates_unlisted_gist_with_watchlist_data(self, request):
+        request.side_effect = [
+            self.response([]),
+            self.response({"id": "gist-new"}, status_code=201),
+        ]
 
-        self.store.save_movie(self.session, {"title": "A Movie", "year": 2026, "tmdb_id": 42})
-
-        call = request.call_args
-        self.assertEqual(
-            call.args[1],
-            "https://example.supabase.co/rest/v1/user_watchlists?on_conflict=user_id,movie_id",
+        self.store.save_movie(
+            self.session,
+            {"title": "A Movie", "year": 2026, "tmdb_id": 42},
         )
-        self.assertEqual(call.kwargs["headers"]["Authorization"], "Bearer user-access-token")
+
+        create_call = request.call_args_list[1]
+        self.assertEqual(create_call.args[:2], ("POST", "https://api.github.com/gists"))
         self.assertEqual(
-            call.kwargs["json"],
+            create_call.kwargs["headers"]["Authorization"],
+            "Bearer user-access-token",
+        )
+        body = create_call.kwargs["json"]
+        self.assertFalse(body["public"])
+        self.assertEqual(body["description"], self.store.GIST_DESCRIPTION)
+        self.assertEqual(
+            json.loads(body["files"][self.store.WATCHLIST_FILENAME]["content"]),
             {
-                "user_id": "user-123",
-                "movie_id": "tmdb:42",
-                "movie_data": {"title": "A Movie", "year": 2026, "tmdb_id": 42},
+                "version": 1,
+                "movies": [{"title": "A Movie", "year": 2026, "tmdb_id": 42}],
             },
         )
+        self.assertEqual(self.session["gist_id"], "gist-new")
 
     @patch("src.account_store.requests.request")
-    def test_remove_movie_is_scoped_to_the_current_user(self, request):
-        request.return_value = self.response({}, status_code=204)
+    def test_remove_and_clear_update_existing_gist(self, request):
+        movie = {"title": "A Movie", "tmdb_id": 42}
+        request.side_effect = [
+            self.response(
+                {
+                    "files": {
+                        self.store.WATCHLIST_FILENAME: {
+                            "content": json.dumps({"version": 1, "movies": [movie]})
+                        }
+                    }
+                }
+            ),
+            self.response({}, status_code=200),
+            self.response(
+                {
+                    "files": {
+                        self.store.WATCHLIST_FILENAME: {
+                            "content": json.dumps({"version": 1, "movies": [movie]})
+                        }
+                    }
+                }
+            ),
+            self.response({}, status_code=200),
+        ]
+        self.session["gist_id"] = "gist-1"
 
-        self.store.remove_movie(self.session, {"title": "A Movie", "year": 2026, "tmdb_id": 42})
+        self.store.remove_movie(self.session, movie)
+        self.store.clear_watchlist(self.session)
 
-        call = request.call_args
-        self.assertEqual(call.args[0], "DELETE")
+        patch_calls = [call for call in request.call_args_list if call.args[0] == "PATCH"]
+        self.assertEqual(len(patch_calls), 2)
         self.assertEqual(
-            call.kwargs["params"],
-            {"user_id": "eq.user-123", "movie_id": "eq.tmdb:42"},
+            json.loads(
+                patch_calls[0].kwargs["json"]["files"][
+                    self.store.WATCHLIST_FILENAME
+                ]["content"]
+            )["movies"],
+            [],
         )
-        self.assertEqual(call.kwargs["headers"]["Authorization"], "Bearer user-access-token")
+        self.assertEqual(
+            json.loads(
+                patch_calls[1].kwargs["json"]["files"][
+                    self.store.WATCHLIST_FILENAME
+                ]["content"]
+            )["movies"],
+            [],
+        )
 
     @patch("src.account_store.requests.request")
-    def test_service_errors_are_reported_without_silent_fallback(self, request):
-        response = self.response({"msg": "Invalid login credentials"}, status_code=400)
-        response.raise_for_status.side_effect = HTTPError("bad request")
+    def test_github_errors_are_reported(self, request):
+        response = self.response({"message": "Bad credentials"}, status_code=401)
+        response.raise_for_status.side_effect = HTTPError("unauthorized")
         request.return_value = response
 
-        with self.assertRaisesRegex(AccountStoreError, "Invalid login credentials"):
-            self.store.sign_in("movie.fan@example.com", "bad-password")
+        with self.assertRaisesRegex(AccountStoreError, "Bad credentials"):
+            self.store.get_watchlist(self.session)
 
 
 if __name__ == "__main__":

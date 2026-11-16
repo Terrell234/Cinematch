@@ -229,6 +229,23 @@ class TMDBClient:
             {"append_to_response": "credits,videos,keywords,release_dates"},
         )
 
+    def get_movie_details_for_title(
+        self, tmdb_id: int | str, title: str, year: int
+    ) -> dict[str, Any]:
+        """Retry a missing movie ID after resolving the exact title and year."""
+        try:
+            return self.get_movie_details(tmdb_id)
+        except requests.HTTPError as error:
+            response = getattr(error, "response", None)
+            if getattr(response, "status_code", None) != 404 or not title or not year:
+                raise
+
+            matched_movie = self.get_catalog_poster(title, year)
+            matched_id = (matched_movie or {}).get("tmdb_id")
+            if not matched_id or str(matched_id) == str(tmdb_id):
+                raise
+            return self.get_movie_details(matched_id)
+
     @staticmethod
     def get_trailer_url(item: dict[str, Any]) -> str:
         """Return the official YouTube trailer URL from TMDB video metadata."""

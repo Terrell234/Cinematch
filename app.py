@@ -6,6 +6,7 @@ content-based ML, Cinema Blend alchemy, visual mood matching, and live TMDB sync
 import json
 import os
 import random
+import secrets
 import time
 from datetime import date
 from urllib.parse import parse_qs, quote_plus, urlparse
@@ -28,7 +29,7 @@ from src.data_loader import (
     get_recommender,
     load_movie_data,
 )
-from src.account_store import AccountStoreError, SupabaseAccountStore
+from src.account_store import AccountStoreError, GitHubGistAccountStore
 from src.tmdb_client import TMDBClient
 
 # Page configuration
@@ -314,14 +315,6 @@ if "account_session" not in st.session_state:
     st.session_state["account_session"] = None
 if "selected_movie_for_search" not in st.session_state:
     st.session_state["selected_movie_for_search"] = "Inception"
-if st.session_state.pop("clear_account_password_fields", False):
-    for password_key in (
-        "account_login_password",
-        "account_signup_password",
-        "account_signup_confirm",
-    ):
-        st.session_state.pop(password_key, None)
-
 try:
     secret_key = str(
         st.secrets.get("TMDB_API_KEY", "")
@@ -359,38 +352,41 @@ def read_app_secret(name: str) -> str:
     return str(value or os.environ.get(name, "")).strip()
 
 
-supabase_url = read_app_secret("SUPABASE_URL")
-supabase_anon_key = read_app_secret("SUPABASE_ANON_KEY")
-supabase_redirect_url = read_app_secret("SUPABASE_REDIRECT_URL")
-supabase_oauth_state_secret = read_app_secret("SUPABASE_OAUTH_STATE_SECRET")
+github_client_id = read_app_secret("GITHUB_CLIENT_ID")
+github_client_secret = read_app_secret("GITHUB_CLIENT_SECRET")
+github_redirect_url = read_app_secret("GITHUB_REDIRECT_URL")
 account_config_error = None
-try:
-    account_store = (
-        SupabaseAccountStore(supabase_url, supabase_anon_key)
-        if supabase_url and supabase_anon_key
-        else None
-    )
-except AccountStoreError as error:
-    account_store = None
-    account_config_error = str(error)
-github_oauth_configured = bool(
-    account_store and supabase_redirect_url and supabase_oauth_state_secret
+account_store = (
+    GitHubGistAccountStore(github_client_id, github_client_secret)
+    if github_client_id and github_client_secret
+    else None
 )
-github_oauth_cookie = "cinematch_github_oauth_nonce"
-if github_oauth_configured and not st.session_state.get("account_session"):
+github_oauth_configured = bool(account_store and github_redirect_url)
+github_oauth_cookie = "cinematch_github_oauth_state"
+
+
+def prepare_github_oauth_request() -> None:
+    global account_config_error
+    if (
+        account_store is None
+        or not github_redirect_url
+        or st.session_state.get("account_session")
+    ):
+        return
     oauth_request = st.session_state.get("github_oauth_request")
     if not oauth_request or oauth_request.get("expires_at", 0) <= int(time.time()) + 60:
         try:
-            authorization_url, nonce = account_store.create_github_oauth_request(
-                supabase_redirect_url,
-                supabase_oauth_state_secret,
+            state = secrets.token_urlsafe(32)
+            authorization_url = account_store.create_github_oauth_request(
+                github_redirect_url,
+                state,
             )
         except AccountStoreError as error:
             account_config_error = str(error)
         else:
             st.session_state["github_oauth_request"] = {
                 "authorization_url": authorization_url,
-                "nonce": nonce,
+                "state": state,
                 "expires_at": int(time.time()) + 600,
             }
 
@@ -404,13 +400,13 @@ def clear_account_session() -> None:
 
 def process_github_oauth_callback() -> None:
     code = str(st.query_params.get("code") or "")
-    encrypted_state = str(st.query_params.get("oauth_state") or "")
+    returned_state = str(st.query_params.get("state") or "")
     oauth_error = str(
         st.query_params.get("error")
         or st.query_params.get("error_description")
         or ""
     )
-    if not (code or encrypted_state or oauth_error):
+    if not (code or returned_state or oauth_error):
         return
 
     try:
@@ -418,11 +414,19 @@ def process_github_oauth_callback() -> None:
             raise AccountStoreError("GitHub sign-in was canceled or rejected.")
         if account_store is None or not github_oauth_configured:
             raise AccountStoreError("GitHub sign-in is not configured.")
+        oauth_request = st.session_state.get("github_oauth_request") or {}
+        expected_state = str(oauth_request.get("state") or "")
+        browser_state = str(st.context.cookies.get(github_oauth_cookie, ""))
+        account_store.validate_github_oauth_state(
+            returned_state,
+            expected_state,
+            browser_state,
+            int(oauth_request.get("expires_at") or 0),
+        )
         session = account_store.exchange_github_oauth_code(
             auth_code=code,
-            encrypted_state=encrypted_state,
-            browser_nonce=st.context.cookies.get(github_oauth_cookie, ""),
-            state_secret=supabase_oauth_state_secret,
+            state=returned_state,
+            redirect_url=github_redirect_url,
         )
     except AccountStoreError as error:
         st.session_state["account_message"] = f"GitHub sign-in failed: {error}"
@@ -435,7 +439,7 @@ def process_github_oauth_callback() -> None:
         st.query_params.clear()
         cookie = (
             f"{github_oauth_cookie}=; Path=/; Max-Age=0; SameSite=Lax"
-            + ("; Secure" if supabase_redirect_url.startswith("https://") else "")
+            + ("; Secure" if github_redirect_url.startswith("https://") else "")
         )
         components.html(
             f"<script>window.parent.document.cookie = {json.dumps(cookie)};</script>",
@@ -443,26 +447,9 @@ def process_github_oauth_callback() -> None:
         )
 
 
-def finish_auth_attempt(message: str | None = None) -> None:
-    if message:
-        st.session_state["account_message"] = message
-    st.session_state["clear_account_password_fields"] = True
-    st.rerun()
-
-
 def log_out_account() -> None:
-    logout_error = None
-    if account_store and account_session:
-        try:
-            account_store.sign_out(account_session["access_token"])
-        except (AccountStoreError, KeyError) as error:
-            logout_error = str(error)
     clear_account_session()
-    if logout_error:
-        st.session_state["account_message"] = (
-            "Signed out locally, but the account service could not revoke the "
-            f"remote session: {logout_error}"
-        )
+    st.session_state["github_oauth_request"] = None
     st.rerun()
 
 
@@ -475,12 +462,16 @@ def load_account_watchlist() -> tuple[dict | None, bool, str | None]:
         return None, False, None
     if account_store is None:
         clear_account_session()
-        return None, False, "Supabase account settings are missing."
+        return None, False, "GitHub account settings are missing."
+    if not session.get("login") or not session.get("user_id"):
+        clear_account_session()
+        return None, False, "Please sign in with GitHub again to access your watchlist."
 
-    if int(session.get("expires_at") or 0) <= int(time.time()) + 60:
+    expires_at = int(session.get("expires_at") or 0)
+    if expires_at and expires_at <= int(time.time()) + 60:
         try:
-            session = account_store.refresh_session(session["refresh_token"])
-        except (AccountStoreError, KeyError) as error:
+            session = account_store.refresh_session(session)
+        except AccountStoreError as error:
             clear_account_session()
             return None, False, f"Your account session expired. Please sign in again. {error}"
         st.session_state["account_session"] = session
@@ -501,6 +492,8 @@ def load_account_watchlist() -> tuple[dict | None, bool, str | None]:
     return session, True, None
 
 
+process_github_oauth_callback()
+prepare_github_oauth_request()
 account_session, watchlist_ready, account_error = load_account_watchlist()
 
 
@@ -560,9 +553,6 @@ def clear_watchlist() -> None:
     st.session_state["watchlist"] = []
     st.toast("Your watchlist has been cleared.")
     st.rerun()
-
-
-process_github_oauth_callback()
 
 
 def show_tmdb_error(action: str, error: requests.RequestException) -> None:
@@ -671,16 +661,13 @@ header_space, account_column = st.columns([8, 1])
 with account_column:
     with st.popover("👤 Account"):
         if account_store is None:
-            if account_config_error:
-                st.error(account_config_error)
-            else:
-                st.info(
-                    "Accounts require `SUPABASE_URL` and `SUPABASE_ANON_KEY` in Streamlit Secrets."
-                )
+            st.info(
+                "GitHub accounts need `GITHUB_CLIENT_ID` and "
+                "`GITHUB_CLIENT_SECRET` in Streamlit Secrets."
+            )
         elif account_session:
-            if watchlist_ready:
-                st.caption(f"Signed in as **{account_session.get('email') or 'CineMatch user'}**")
-            else:
+            st.caption(f"Signed in as **@{account_session['login']}**")
+            if not watchlist_ready:
                 st.warning("Your account is signed in, but the watchlist is unavailable.")
                 if account_error:
                     st.error(account_error)
@@ -692,9 +679,9 @@ with account_column:
             oauth_request = st.session_state.get("github_oauth_request")
             if github_oauth_configured and oauth_request:
                 cookie = (
-                    f"{github_oauth_cookie}={oauth_request['nonce']}; "
+                    f"{github_oauth_cookie}={oauth_request['state']}; "
                     "Path=/; Max-Age=600; SameSite=Lax"
-                    + ("; Secure" if supabase_redirect_url.startswith("https://") else "")
+                    + ("; Secure" if github_redirect_url.startswith("https://") else "")
                 )
                 components.html(
                     f"<script>window.parent.document.cookie = {json.dumps(cookie)};</script>",
@@ -705,84 +692,18 @@ with account_column:
                     href=oauth_request["authorization_url"],
                     type="primary",
                 )
-                st.caption("Or use an email and password:")
+                st.caption(
+                    "Your watchlist is stored in an unlisted GitHub Gist. "
+                    "Secret Gists are not private; anyone with the Gist URL can view them."
+                )
             elif github_oauth_configured:
                 st.error(account_config_error or "Could not prepare GitHub sign-in.")
-            elif account_store:
+            else:
                 st.info(
-                    "GitHub sign-in needs `SUPABASE_REDIRECT_URL` and "
-                    "`SUPABASE_OAUTH_STATE_SECRET` in Streamlit Secrets."
+                    "GitHub sign-in also needs `GITHUB_REDIRECT_URL` in Streamlit Secrets."
                 )
             if account_error:
                 st.warning(account_error)
-            auth_mode = st.radio(
-                "Choose an account action",
-                options=["Log in", "Sign up"],
-                horizontal=True,
-                key="account_auth_mode",
-            )
-            if auth_mode == "Log in":
-                with st.form("account_login_form"):
-                    login_email = st.text_input("Email address", key="account_login_email")
-                    login_password = st.text_input(
-                        "Password",
-                        type="password",
-                        key="account_login_password",
-                    )
-                    login_submitted = st.form_submit_button(
-                        "Log in",
-                        type="primary",
-                        use_container_width=True,
-                    )
-                if login_submitted:
-                    try:
-                        signed_in = account_store.sign_in(login_email.strip(), login_password)
-                    except AccountStoreError as error:
-                        finish_auth_attempt(str(error))
-                    else:
-                        st.session_state["account_session"] = signed_in
-                        st.session_state["watchlist_loaded"] = False
-                        finish_auth_attempt()
-            else:
-                with st.form("account_signup_form"):
-                    signup_email = st.text_input("Email address", key="account_signup_email")
-                    signup_password = st.text_input(
-                        "Password (at least 8 characters)",
-                        type="password",
-                        key="account_signup_password",
-                    )
-                    confirm_password = st.text_input(
-                        "Confirm password",
-                        type="password",
-                        key="account_signup_confirm",
-                    )
-                    signup_submitted = st.form_submit_button(
-                        "Create account",
-                        type="primary",
-                        use_container_width=True,
-                    )
-                if signup_submitted:
-                    if len(signup_password) < 8:
-                        finish_auth_attempt("Choose a password with at least 8 characters.")
-                    elif signup_password != confirm_password:
-                        finish_auth_attempt("The passwords do not match.")
-                    else:
-                        try:
-                            signed_up = account_store.sign_up(
-                                signup_email.strip(),
-                                signup_password,
-                            )
-                        except AccountStoreError as error:
-                            finish_auth_attempt(str(error))
-                        else:
-                            if signed_up:
-                                st.session_state["account_session"] = signed_up
-                                st.session_state["watchlist_loaded"] = False
-                                finish_auth_attempt()
-                            else:
-                                finish_auth_attempt(
-                                    "Account created. Check your email to confirm it, then log in."
-                                )
 if account_message:
     st.warning(account_message)
 
@@ -974,13 +895,26 @@ def verified_youtube_video_url(url: str) -> str:
     return f"https://www.youtube.com/watch?v={video_id}"
 
 
+@st.dialog("Watch trailer", width="large")
+def show_expanded_trailer(title: str, trailer_url: str) -> None:
+    st.subheader(title)
+    st.video(trailer_url)
+
+
+def render_trailer_player(trailer_url: str, title: str, key: str) -> None:
+    st.video(trailer_url)
+    if st.button("⛶ Expand trailer", key=key, use_container_width=True):
+        show_expanded_trailer(title, trailer_url)
+
+
 def render_movie_trailer(movie: dict, key_prefix: str) -> None:
     title = str(movie.get("title") or "this movie")
     try:
         year = int(movie.get("year") or 0)
     except (TypeError, ValueError):
         year = 0
-    cache_key = f"{title.casefold()}:{year}"
+    tmdb_id = str(movie.get("tmdb_id") or "").strip()
+    cache_key = f"tmdb:{tmdb_id}" if tmdb_id else f"{title.casefold()}:{year}"
     trailer_cache = st.session_state["tmdb_trailer_cache"]
     stored_trailer = verified_youtube_video_url(str(movie.get("trailer_url") or ""))
     trailer_url = stored_trailer or trailer_cache.get(cache_key, "")
@@ -988,7 +922,11 @@ def render_movie_trailer(movie: dict, key_prefix: str) -> None:
 
     with st.expander("▶️ Watch trailer"):
         if trailer_url:
-            st.video(trailer_url)
+            render_trailer_player(
+                trailer_url,
+                title,
+                f"expand_trailer_{key_prefix}",
+            )
             return
 
         if cache_key in trailer_cache:
@@ -1030,7 +968,11 @@ def render_movie_trailer(movie: dict, key_prefix: str) -> None:
                 trailer_cache[cache_key] = ""
             else:
                 try:
-                    details = tmdb.get_movie_details(tmdb_id)
+                    details = tmdb.get_movie_details_for_title(
+                        tmdb_id,
+                        title,
+                        year,
+                    )
                 except requests.RequestException as error:
                     show_tmdb_error(f"Could not load trailer for {title}", error)
                     return
@@ -1040,7 +982,11 @@ def render_movie_trailer(movie: dict, key_prefix: str) -> None:
 
             trailer_url = trailer_cache[cache_key]
             if trailer_url:
-                st.video(trailer_url)
+                render_trailer_player(
+                    trailer_url,
+                    title,
+                    f"expand_trailer_{key_prefix}",
+                )
             else:
                 st.info("TMDB does not list a playable trailer for this title.")
                 st.link_button(
@@ -2193,9 +2139,9 @@ with tab_watchlist:
     st.write("Your personal collection of saved films. Generate personalized recommendations based on your collective taste profile.")
 
     if account_session is None:
-        st.info("Log in or create an account from the top-right Account menu to access your private watchlist.")
+        st.info("Sign in from the top-right Account menu to access your saved watchlist.")
     elif not watchlist_ready:
-        st.error(account_error or "Your private watchlist could not be loaded.")
+        st.error(account_error or "Your saved watchlist could not be loaded.")
     elif not saved_watchlist:
         st.info("Your watchlist is empty! Click **⭐ Watchlist** on any movie card in the app to save it here.")
     elif not watchlist:

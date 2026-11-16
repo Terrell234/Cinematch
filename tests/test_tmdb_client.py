@@ -1,6 +1,8 @@
 import unittest
 from unittest.mock import Mock, call, patch
 
+import requests
+
 from src.tmdb_client import TMDBClient
 
 
@@ -75,6 +77,39 @@ class TMDBClientTests(unittest.TestCase):
             search_movies.call_args_list,
             [call("A Movie", year=2024), call("A Movie")],
         )
+
+    def test_movie_details_retries_exact_title_year_after_not_found(self):
+        client = TMDBClient("test-key")
+        not_found = requests.HTTPError(response=Mock(status_code=404))
+        with (
+            patch.object(
+                client,
+                "get_movie_details",
+                side_effect=[not_found, {"id": 2, "videos": {"results": []}}],
+            ) as get_movie_details,
+            patch.object(
+                client,
+                "get_catalog_poster",
+                return_value={"tmdb_id": 2},
+            ) as get_catalog_poster,
+        ):
+            details = client.get_movie_details_for_title(1, "A Movie", 2024)
+
+        self.assertEqual(details, {"id": 2, "videos": {"results": []}})
+        get_catalog_poster.assert_called_once_with("A Movie", 2024)
+        self.assertEqual(get_movie_details.call_args_list, [call(1), call(2)])
+
+    def test_movie_details_does_not_retry_non_not_found_errors(self):
+        client = TMDBClient("test-key")
+        unauthorized = requests.HTTPError(response=Mock(status_code=401))
+        with (
+            patch.object(client, "get_movie_details", side_effect=unauthorized),
+            patch.object(client, "get_catalog_poster") as get_catalog_poster,
+        ):
+            with self.assertRaises(requests.HTTPError):
+                client.get_movie_details_for_title(1, "A Movie", 2024)
+
+        get_catalog_poster.assert_not_called()
 
     def test_movie_recommendations_use_tmdb_endpoint(self):
         client = TMDBClient("test-key")
