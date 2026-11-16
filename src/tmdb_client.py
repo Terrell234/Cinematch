@@ -91,11 +91,15 @@ class TMDBClient:
         genre_ids: set[int] | None = None,
         min_rating: float = 0,
         year_range: tuple[int, int] | None = None,
+        runtime_range: tuple[int, int] | None = None,
+        min_votes: int = 0,
     ) -> list[dict[str, Any]]:
-        """Filter TMDB list results by genre, vote average, and release year."""
+        """Filter TMDB list results by genre, score, year, runtime, and vote count."""
         filtered = []
         for movie in movies:
             if float(movie.get("vote_average") or 0) < min_rating:
+                continue
+            if int(movie.get("vote_count") or 0) < min_votes:
                 continue
             if genre_ids is not None:
                 movie_genres = {int(genre_id) for genre_id in movie.get("genre_ids", [])}
@@ -105,6 +109,10 @@ class TMDBClient:
                 release_date = str(movie.get("release_date") or "")
                 year_text = release_date[:4]
                 if not year_text.isdigit() or not year_range[0] <= int(year_text) <= year_range[1]:
+                    continue
+            if runtime_range is not None:
+                runtime = movie.get("runtime")
+                if runtime is None or not runtime_range[0] <= int(runtime) <= runtime_range[1]:
                     continue
             filtered.append(movie)
         return filtered
@@ -138,8 +146,34 @@ class TMDBClient:
             return []
         return self._get("search/movie", {"query": query, "include_adult": "false"}).get("results", [])
 
+    def match_catalog_search_posters(
+        self,
+        catalog_movies: list[dict[str, Any]],
+        tmdb_movies: list[dict[str, Any]],
+    ) -> tuple[dict[tuple[str, int], dict[str, Any]], list[dict[str, Any]]]:
+        """Match TMDB poster art to catalog titles only when title and year agree."""
+        catalog_keys = {
+            (str(movie["title"]).casefold(), int(movie["year"]))
+            for movie in catalog_movies
+        }
+        matched_posters = {}
+        unmatched_movies = []
+        for item in tmdb_movies:
+            movie = self.format_tmdb_movie(item)
+            movie["tmdb_id"] = item.get("id")
+            title_year = (movie["title"].casefold(), movie["year"])
+            if title_year in catalog_keys:
+                matched_posters[title_year] = movie
+            elif movie["poster_url"]:
+                movie["id"] = item.get("id")
+                unmatched_movies.append(movie)
+        return matched_posters, unmatched_movies
+
     def get_movie_details(self, tmdb_id: int | str) -> dict[str, Any]:
-        return self._get(f"movie/{tmdb_id}", {"append_to_response": "credits,videos"})
+        return self._get(
+            f"movie/{tmdb_id}",
+            {"append_to_response": "credits,videos,keywords,release_dates"},
+        )
 
     def get_category_feed(self, category: str) -> list[dict[str, Any]]:
         if category == "new":
@@ -170,6 +204,29 @@ class TMDBClient:
             if person.get("job") == "Director"
         ]
         videos = (item.get("videos") or {}).get("results", [])
+        keyword_data = item.get("keywords") or {}
+        if isinstance(keyword_data, dict):
+            keyword_data = keyword_data.get("keywords") or keyword_data.get("results") or []
+        keywords = [
+            keyword.get("name", "")
+            for keyword in keyword_data
+            if isinstance(keyword, dict) and keyword.get("name")
+        ]
+        release_dates = item.get("release_dates") or {}
+        release_countries = release_dates.get("results", []) if isinstance(release_dates, dict) else []
+        release_countries = sorted(
+            release_countries,
+            key=lambda country: country.get("iso_3166_1") != "US",
+        )
+        certification = next(
+            (
+                str(release.get("certification") or "").strip()
+                for country in release_countries
+                for release in country.get("release_dates", [])
+                if str(release.get("certification") or "").strip()
+            ),
+            "",
+        )
         trailer = next(
             (
                 f"https://www.youtube.com/watch?v={video['key']}"
@@ -180,9 +237,12 @@ class TMDBClient:
         )
         poster = item.get("poster_path")
         backdrop = item.get("backdrop_path")
+        revenue = int(item.get("revenue") or 0)
+        budget = int(item.get("budget") or 0)
         return {
             "title": item.get("title") or item.get("name") or "Untitled",
             "year": int(release_date[:4]) if release_date[:4].isdigit() else 0,
+            "certification": certification,
             "genres": ", ".join(genre_names),
             "director": ", ".join(directors),
             "cast": ", ".join(name for name in cast if name),
@@ -192,9 +252,14 @@ class TMDBClient:
             "moods": "",
             "tagline": item.get("tagline") or "",
             "overview": item.get("overview") or "",
-            "keywords": "",
+            "keywords": ", ".join(keywords),
             "poster_url": f"{self.IMAGE_URL}/w500{poster}" if poster else "",
             "backdrop_url": f"{self.IMAGE_URL}/w1280{backdrop}" if backdrop else "",
             "trailer_url": trailer,
-            "box_office": "",
+            "box_office": f"${revenue:,}" if revenue else "",
+            "budget": budget,
+            "revenue": revenue,
+            "status": item.get("status") or "",
+            "original_language": item.get("original_language") or "",
+            "tmdb_id": item.get("id"),
         }

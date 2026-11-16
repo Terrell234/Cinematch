@@ -1,10 +1,17 @@
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from src.tmdb_client import TMDBClient
 
 
 class TMDBClientTests(unittest.TestCase):
+    def test_client_reads_tmdb_api_key_from_environment(self):
+        with patch.dict("os.environ", {"TMDB_API_KEY": "env-test-key"}):
+            client = TMDBClient()
+
+        self.assertTrue(client.is_configured)
+        self.assertEqual(client.params, {"api_key": "env-test-key"})
+
     def test_movie_recommendations_use_tmdb_endpoint(self):
         client = TMDBClient("test-key")
         response = Mock()
@@ -19,6 +26,25 @@ class TMDBClientTests(unittest.TestCase):
         client.session.get.assert_called_once_with(
             "https://api.themoviedb.org/3/movie/123/recommendations",
             params={"api_key": "test-key", "page": 2},
+            timeout=12,
+        )
+
+    def test_movie_details_request_credits_keywords_and_release_ratings(self):
+        client = TMDBClient("test-key")
+        response = Mock()
+        response.json.return_value = {"id": 42, "title": "A Movie"}
+        response.raise_for_status.return_value = None
+        client.session.get = Mock(return_value=response)
+
+        result = client.get_movie_details(42)
+
+        self.assertEqual(result["title"], "A Movie")
+        client.session.get.assert_called_once_with(
+            "https://api.themoviedb.org/3/movie/42",
+            params={
+                "api_key": "test-key",
+                "append_to_response": "credits,videos,keywords,release_dates",
+            },
             timeout=12,
         )
 
@@ -62,6 +88,39 @@ class TMDBClientTests(unittest.TestCase):
 
         self.assertEqual([movie["id"] for movie in results], [1])
 
+    def test_filter_movie_results_applies_runtime_and_vote_constraints(self):
+        movies = [
+            {
+                "id": 1,
+                "vote_average": 8.0,
+                "vote_count": 900,
+                "release_date": "2024-01-01",
+                "runtime": 120,
+            },
+            {
+                "id": 2,
+                "vote_average": 8.0,
+                "vote_count": 400,
+                "release_date": "2024-01-01",
+                "runtime": 120,
+            },
+            {
+                "id": 3,
+                "vote_average": 8.0,
+                "vote_count": 900,
+                "release_date": "2024-01-01",
+                "runtime": 90,
+            },
+        ]
+
+        results = TMDBClient.filter_movie_results(
+            movies,
+            runtime_range=(100, 140),
+            min_votes=500,
+        )
+
+        self.assertEqual([movie["id"] for movie in results], [1])
+
     def test_format_tmdb_movie_maps_discover_genres(self):
         client = TMDBClient()
 
@@ -77,6 +136,85 @@ class TMDBClientTests(unittest.TestCase):
         self.assertEqual(movie["genres"], "Sci-Fi, Adventure")
         self.assertEqual(movie["year"], 2024)
         self.assertEqual(movie["runtime"], 0)
+
+    def test_catalog_search_posters_require_matching_title_and_year(self):
+        client = TMDBClient()
+
+        matched, unmatched = client.match_catalog_search_posters(
+            [{"title": "A Movie", "year": 2024}],
+            [
+                {
+                    "id": 1,
+                    "title": "A Movie",
+                    "release_date": "2024-05-01",
+                    "poster_path": "/matching.jpg",
+                },
+                {
+                    "id": 2,
+                    "title": "A Movie",
+                    "release_date": "2020-05-01",
+                    "poster_path": "/different-year.jpg",
+                },
+            ],
+        )
+
+        self.assertEqual(
+            matched[("a movie", 2024)]["poster_url"],
+            "https://image.tmdb.org/t/p/w500/matching.jpg",
+        )
+        self.assertEqual(matched[("a movie", 2024)]["tmdb_id"], 1)
+        self.assertEqual([movie["id"] for movie in unmatched], [2])
+
+    def test_format_tmdb_movie_includes_search_detail_fields(self):
+        client = TMDBClient()
+
+        movie = client.format_tmdb_movie(
+            {
+                "title": "A Movie",
+                "release_date": "2024-05-01",
+                "runtime": 128,
+                "genres": [{"name": "Drama"}],
+                "credits": {
+                    "cast": [{"name": "Lead Actor"}, {"name": "Supporting Actor"}],
+                    "crew": [{"name": "Film Director", "job": "Director"}],
+                },
+                "videos": {
+                    "results": [
+                        {
+                            "site": "YouTube",
+                            "type": "Trailer",
+                            "key": "trailer-key",
+                        }
+                    ]
+                },
+                "keywords": {"keywords": [{"name": "family"}, {"name": "space travel"}]},
+                "release_dates": {
+                    "results": [
+                        {
+                            "iso_3166_1": "US",
+                            "release_dates": [{"certification": "PG-13"}],
+                        }
+                    ]
+                },
+                "budget": 100000000,
+                "revenue": 250000000,
+                "status": "Released",
+                "original_language": "en",
+            }
+        )
+
+        self.assertEqual(movie["runtime"], 128)
+        self.assertEqual(movie["genres"], "Drama")
+        self.assertEqual(movie["cast"], "Lead Actor, Supporting Actor")
+        self.assertEqual(movie["director"], "Film Director")
+        self.assertEqual(movie["certification"], "PG-13")
+        self.assertEqual(movie["keywords"], "family, space travel")
+        self.assertEqual(movie["budget"], 100000000)
+        self.assertEqual(movie["revenue"], 250000000)
+        self.assertEqual(movie["box_office"], "$250,000,000")
+        self.assertEqual(movie["status"], "Released")
+        self.assertEqual(movie["original_language"], "en")
+        self.assertEqual(movie["trailer_url"], "https://www.youtube.com/watch?v=trailer-key")
 
 
 if __name__ == "__main__":

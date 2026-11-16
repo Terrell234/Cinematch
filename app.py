@@ -6,6 +6,7 @@ content-based ML, Cinema Blend alchemy, visual mood matching, and live TMDB sync
 import os
 import random
 from datetime import date
+from urllib.parse import urlparse
 
 import requests
 import streamlit as st
@@ -137,6 +138,22 @@ st.markdown("""
         transform: translateY(-3px);
         border-color: rgba(196, 122, 80, 0.78);
         box-shadow: 0 14px 32px rgba(0, 0, 0, 0.55), 0 0 20px rgba(196, 122, 80, 0.08);
+    }
+
+    .poster-placeholder {
+        aspect-ratio: 2 / 3;
+        width: 100%;
+        border-radius: 7px;
+        margin-bottom: 12px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        color: #b9a895;
+        background: linear-gradient(145deg, #302820, #171310);
+        border: 1px solid #46372b;
+        text-align: center;
     }
 
     .match-pill {
@@ -290,14 +307,16 @@ if "watchlist" not in st.session_state:
     st.session_state["watchlist"] = []
 if "selected_movie_for_search" not in st.session_state:
     st.session_state["selected_movie_for_search"] = "Inception"
-if "tmdb_api_key" not in st.session_state:
-    # Try Streamlit Secrets first (for cloud deployment), then fall back to .env / OS env
-    try:
-        secret_key = st.secrets.get("TMDB_API_KEY", "")
-    except Exception:
-        secret_key = ""
-    env_key = os.environ.get("TMDB_API_KEY", "").strip()
+
+try:
+    secret_key = str(st.secrets.get("TMDB_API_KEY", "") or "").strip()
+except FileNotFoundError:
+    secret_key = ""
+env_key = os.environ.get("TMDB_API_KEY", "").strip()
+if secret_key or env_key:
     st.session_state["tmdb_api_key"] = secret_key or env_key
+elif "tmdb_api_key" not in st.session_state:
+    st.session_state["tmdb_api_key"] = ""
 
 # Load data and recommendation engine
 try:
@@ -310,14 +329,89 @@ except Exception as e:
 # Initialize TMDB Client
 tmdb = TMDBClient(api_key_or_token=st.session_state.get("tmdb_api_key", ""))
 
+
+def show_tmdb_error(action: str, error: requests.RequestException) -> None:
+    response = getattr(error, "response", None)
+    status_code = getattr(response, "status_code", None)
+    reason = f"HTTP {status_code}" if status_code else type(error).__name__
+    st.error(f"{action} failed ({reason}). Check the TMDB key and network connection.")
+
+
+def load_tmdb_runtimes(movies: list[dict]) -> list[dict]:
+    """Fetch runtime metadata only when a narrowed runtime filter needs it."""
+    if runtime_range_filter == runtime_bounds:
+        return movies
+
+    cache = st.session_state["tmdb_runtime_cache"]
+    enriched = []
+    for item in movies:
+        movie = dict(item)
+        tmdb_id = movie.get("id")
+        if not tmdb_id:
+            enriched.append(movie)
+            continue
+        if tmdb_id not in cache:
+            try:
+                details = tmdb.get_movie_details(tmdb_id)
+            except requests.RequestException as error:
+                show_tmdb_error(f"Could not load runtime for {movie.get('title', 'movie')}", error)
+                continue
+            cache[tmdb_id] = details.get("runtime")
+        runtime = cache[tmdb_id]
+        if runtime is not None:
+            movie["runtime"] = runtime
+        enriched.append(movie)
+    return enriched
+
+
+def matches_any_genre(value: str, selected_genres: set[str]) -> bool:
+    movie_genres = {genre.strip() for genre in str(value or "").split(",") if genre.strip()}
+    return bool(movie_genres.intersection(selected_genres))
+
+
+def reset_cinema_filters() -> None:
+    st.session_state["min_rating"] = 7.0
+    st.session_state["genre_filter"] = []
+    st.session_state["year_range"] = (min_year, max_year)
+    st.session_state["runtime_range"] = runtime_bounds
+    st.session_state["min_votes"] = 0
+
+
 # -------------------------------------------------------------
 # TOP-OF-PAGE MOVIE SEARCH
 # -------------------------------------------------------------
-search_query = st.text_input(
-    ":material/search: Search the movie catalog",
-    placeholder="Search by title, genre, actor, director, mood, or story keyword...",
-    key="catalog_search",
-)
+if "catalog_search" not in st.session_state:
+    st.session_state["catalog_search"] = ""
+if "catalog_tmdb_poster_cache" not in st.session_state:
+    st.session_state["catalog_tmdb_poster_cache"] = {}
+if "catalog_tmdb_details_cache" not in st.session_state:
+    st.session_state["catalog_tmdb_details_cache"] = {}
+if "tmdb_runtime_cache" not in st.session_state:
+    st.session_state["tmdb_runtime_cache"] = {}
+
+with st.form("catalog_search_form", border=False):
+    search_cols = st.columns([6, 1])
+    with search_cols[0]:
+        search_input = st.text_input(
+            ":material/search: Search the movie catalog",
+            placeholder="Describe a story, mood, genre, actor, director, or movie...",
+            key="catalog_search_input",
+        )
+    with search_cols[1]:
+        st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
+        search_submitted = st.form_submit_button(
+            "Search",
+            icon=":material/search:",
+            type="primary",
+            use_container_width=True,
+        )
+
+if search_submitted:
+    st.session_state["catalog_search"] = search_input.strip()
+    if search_input.strip() and not tmdb.is_configured:
+        st.info("Recommendations use the local catalog. Add a TMDB key to retrieve live movie details.")
+
+search_query = st.session_state["catalog_search"]
 
 # -------------------------------------------------------------
 # HERO MARQUEE BANNER
@@ -333,14 +427,15 @@ st.markdown("""
 # TOP SEARCH AND CINEMA FILTERS
 # -------------------------------------------------------------
 with st.expander("🎛️ Filters and TMDB settings", expanded=True):
-    filter_cols = st.columns([1.1, 1.5, 1, 1.8, 0.8])
+    runtime_bounds = (int(df["runtime"].min()), int(df["runtime"].max()))
+    filter_cols = st.columns([1, 1.4, 1.6])
     with filter_cols[0]:
         min_rating_filter = st.slider(
-            "⭐ Minimum Rating",
-            min_value=5.0,
-            max_value=9.5,
+            "⭐ Minimum rating",
+            min_value=0.0,
+            max_value=10.0,
             value=st.session_state.get("min_rating", 7.0),
-            step=0.1,
+            step=0.5,
             key="min_rating",
         )
 
@@ -348,51 +443,80 @@ with st.expander("🎛️ Filters and TMDB settings", expanded=True):
     max_year = max(int(df["year"].max()), date.today().year)
     with filter_cols[1]:
         year_range_filter = st.slider(
-            "📅 Release Era",
+            "📅 Release years",
             min_value=min_year,
             max_value=max_year,
             value=(min_year, max_year),
+            key="year_range",
         )
 
     with filter_cols[2]:
-        max_runtime_option = st.selectbox(
-            "⏱️ Runtime",
-            options=[
-                "Any Runtime",
-                "Under 100 mins",
-                "Under 120 mins",
-                "Under 150 mins",
-            ],
-            index=0,
-            key="max_runtime_opt",
+        runtime_range_filter = st.slider(
+            "⏱️ Runtime (minutes)",
+            min_value=runtime_bounds[0],
+            max_value=runtime_bounds[1],
+            value=st.session_state.get("runtime_range", runtime_bounds),
+            step=5,
+            key="runtime_range",
         )
-    max_runtime_val = None
-    if "100" in max_runtime_option:
-        max_runtime_val = 100
-    elif "120" in max_runtime_option:
-        max_runtime_val = 120
-    elif "150" in max_runtime_option:
-        max_runtime_val = 150
 
     all_genres = recommender.get_all_genres()
-    with filter_cols[3]:
+    detail_cols = st.columns([2, 1.4, 1, 0.8])
+    with detail_cols[0]:
         genre_filters = st.multiselect(
-            "🎭 Genre",
+            "🎭 Include genres",
             options=all_genres,
             default=st.session_state.get("genre_filter", []),
             key="genre_filter",
         )
 
-    with filter_cols[4]:
-        st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
-        if st.button("Reset", use_container_width=True, help="Reset cinema filters"):
-            st.session_state["min_rating"] = 7.0
-            st.session_state["genre_filter"] = []
-            st.session_state["max_runtime_opt"] = "Any Runtime"
-            st.rerun()
+    with detail_cols[1]:
+        max_votes = max(1, int(df["votes"].max()))
+        min_votes_filter = st.number_input(
+            "📊 Minimum votes",
+            min_value=0,
+            max_value=max_votes,
+            value=st.session_state.get("min_votes", 0),
+            step=1000,
+            key="min_votes",
+            help="Raise this to favor movies with a larger audience sample.",
+        )
 
-    tmdb_status = "🟢 TMDB connected" if tmdb.is_configured else "⚫ TMDB key not set"
-    st.caption(f"{tmdb_status} · {len(df)} movies in catalog · {len(st.session_state['watchlist'])} saved")
+    with detail_cols[2]:
+        st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
+        st.caption(
+            f"{runtime_range_filter[0]}–{runtime_range_filter[1]} min · "
+            f"{year_range_filter[0]}–{year_range_filter[1]}"
+        )
+
+    with detail_cols[3]:
+        st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
+        st.button(
+            "Reset",
+            use_container_width=True,
+            help="Reset cinema filters",
+            on_click=reset_cinema_filters,
+        )
+
+    tmdb_status = "🟢 TMDB key loaded" if tmdb.is_configured else "⚫ TMDB key not set"
+    status_cols = st.columns([4, 1])
+    with status_cols[0]:
+        st.caption(
+            f"{tmdb_status} · {len(df)} movies in catalog · "
+            f"{len(st.session_state['watchlist'])} saved"
+        )
+    with status_cols[1]:
+        if st.button("Test TMDB", key="test_tmdb_connection", use_container_width=True):
+            if not tmdb.is_configured:
+                st.error("Add `TMDB_API_KEY` to Streamlit Secrets to test the connection.")
+            else:
+                try:
+                    with st.spinner("Checking TMDB connection..."):
+                        test_results = tmdb.get_trending_movies()
+                except requests.RequestException as error:
+                    show_tmdb_error("TMDB connection test", error)
+                else:
+                    st.success(f"Connected to TMDB. Loaded {len(test_results)} trending movies.")
 
 with st.expander("🔑 Configure TMDB API key"):
     tmdb_key_input = st.text_input(
@@ -416,7 +540,73 @@ m_col5.metric("📌 My Watchlist", f"{len(st.session_state['watchlist'])}")
 # -------------------------------------------------------------
 # COMPONENT: VIBRANT MOVIE CARD
 # -------------------------------------------------------------
-def render_cinema_card(movie: dict, key_prefix: str = "card", show_match_button: bool = True):
+def is_verified_tmdb_art(url: str) -> bool:
+    parsed_url = urlparse(str(url or ""))
+    return parsed_url.scheme == "https" and parsed_url.hostname == "image.tmdb.org"
+
+
+def resolve_catalog_movie_poster(movie: dict) -> dict:
+    """Use artwork only after TMDB confirms the catalog title and release year."""
+    resolved_movie = dict(movie)
+    title = str(resolved_movie.get("title") or "").strip()
+    try:
+        year = int(resolved_movie.get("year"))
+    except (TypeError, ValueError):
+        resolved_movie["poster_url"] = ""
+        return resolved_movie
+
+    if not title or not tmdb.is_configured:
+        resolved_movie["poster_url"] = ""
+        return resolved_movie
+
+    title_year = (title.casefold(), year)
+    poster_cache = st.session_state["catalog_tmdb_poster_cache"]
+    if title_year not in poster_cache:
+        try:
+            search_results = tmdb.search_movies(title)
+        except requests.RequestException as error:
+            poster_cache[title_year] = None
+            show_tmdb_error(f"Could not verify the poster for {title}", error)
+        else:
+            matched_posters, _ = tmdb.match_catalog_search_posters(
+                [{"title": title, "year": year}],
+                search_results,
+            )
+            poster_cache[title_year] = matched_posters.get(title_year)
+
+    matched_movie = poster_cache.get(title_year) or {}
+    resolved_movie["poster_url"] = matched_movie.get("poster_url", "")
+    return resolved_movie
+
+
+def render_movie_poster(movie: dict, width: int | None = None) -> None:
+    if movie.get("title") and movie.get("year") is not None:
+        movie = resolve_catalog_movie_poster(movie)
+    poster_url = str(movie.get("poster_url") or "").strip()
+    if poster_url and is_verified_tmdb_art(poster_url):
+        if width:
+            st.image(poster_url, width=width)
+        else:
+            st.image(poster_url, use_container_width=True)
+        return
+
+    st.markdown(
+        """
+        <div class="poster-placeholder">
+            <span class="material-symbols-rounded" style="font-size:2rem;">image_not_supported</span>
+            <span>Verified poster unavailable</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_cinema_card(
+    movie: dict,
+    key_prefix: str = "card",
+    show_match_button: bool = True,
+    show_full_details: bool = False,
+):
     m_id = movie.get("id", random.randint(1000, 9999))
     title = movie.get("title", "Untitled")
     year = movie.get("year", "N/A")
@@ -426,9 +616,11 @@ def render_cinema_card(movie: dict, key_prefix: str = "card", show_match_button:
     genres = movie.get("genres", "")
     director = movie.get("director", "Unknown")
     cast = movie.get("cast", "")
+    certification = movie.get("certification") or "Not available"
     tagline = movie.get("tagline", "")
     overview = movie.get("overview", "")
-    poster_url = movie.get("poster_url") or "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=600&auto=format&fit=crop&q=80"
+    keywords = movie.get("keywords") or "Not available"
+    box_office = movie.get("box_office") or "Not available"
     trailer_url = movie.get("trailer_url") or f"https://www.youtube.com/results?search_query={title.replace(' ', '+')}+trailer"
     match_pct = movie.get("match_percentage")
     reasons = movie.get("match_reasons", [])
@@ -436,8 +628,7 @@ def render_cinema_card(movie: dict, key_prefix: str = "card", show_match_button:
     with st.container():
         st.markdown('<div class="cinema-card">', unsafe_allow_html=True)
 
-        # Poster with rounded container
-        st.image(poster_url, use_container_width=True)
+        render_movie_poster(movie)
 
         if match_pct:
             st.markdown(f'<div class="match-pill">🎯 {match_pct}% MATCH</div>', unsafe_allow_html=True)
@@ -447,7 +638,7 @@ def render_cinema_card(movie: dict, key_prefix: str = "card", show_match_button:
         # Rating & Runtime Pills
         st.markdown(f"""
         <div style="margin-bottom:8px;">
-            <span class="rating-pill">⭐ {rating} / 10</span>
+            <span class="rating-pill">⭐ {rating} / 10 · {int(movie.get("votes") or 0):,} votes</span>
             <span class="runtime-pill">{runtime_label}</span>
         </div>
         """, unsafe_allow_html=True)
@@ -456,7 +647,11 @@ def render_cinema_card(movie: dict, key_prefix: str = "card", show_match_button:
         chips_html = "".join([f'<span class="genre-chip">{g.strip()}</span>' for g in str(genres).split(",")[:3]])
         st.markdown(f"<div style='margin-bottom:6px;'>{chips_html}</div>", unsafe_allow_html=True)
 
-        st.caption(f"🎬 **Dir:** {director} • 👥 **Cast:** {cast.split(',')[0] if cast else 'Ensemble'}")
+        st.caption(
+            f"🎬 **Dir:** {director} • 👥 **Cast:** "
+            f"{cast.split(',')[0] if cast else 'Ensemble'} • "
+            f"🏷️ **Rating:** {certification}"
+        )
 
         if tagline:
             st.markdown(f"<div style='font-size:0.85rem; color:#f59e0b; font-style:italic; margin-top:2px;'>\"{tagline}\"</div>", unsafe_allow_html=True)
@@ -467,6 +662,21 @@ def render_cinema_card(movie: dict, key_prefix: str = "card", show_match_button:
 
         with st.expander("📖 Synopsis"):
             st.write(overview)
+
+        if show_full_details:
+            with st.expander("🎭 Full movie details"):
+                st.write(f"**Certification:** {certification}")
+                st.write(f"**Director:** {director or 'Not available'}")
+                st.write(f"**Full cast:** {cast or 'Not available'}")
+                st.write(f"**Keywords:** {keywords}")
+                st.write(f"**Box office:** {box_office}")
+                budget = int(movie.get("budget") or 0)
+                st.write(f"**Budget:** {f'${budget:,}' if budget else 'Not available'}")
+                st.write(f"**Status:** {movie.get('status') or 'Not available'}")
+                st.write(
+                    f"**Original language:** "
+                    f"{movie.get('original_language') or 'Not available'}"
+                )
 
         with st.expander("▶️ Watch Trailer"):
             if "youtube.com" in trailer_url or "youtu.be" in trailer_url:
@@ -551,56 +761,119 @@ CATEGORIES = {
 # GLOBAL CATALOG SEARCH
 # -------------------------------------------------------------
 if search_query.strip():
-    search_columns = [
-        column
-        for column in (
-            "title",
+    st.markdown(f"### 🎬 Movies related to “{search_query.strip()}”")
+    min_prompt_relevance = st.slider(
+        "Minimum prompt relevance",
+        min_value=0,
+        max_value=50,
+        value=5,
+        step=1,
+        help="Raise this to hide weaker matches; lower it to show more recommendations.",
+        key="prompt_relevance_filter",
+    )
+    recommendations = recommender.recommend_for_prompt(
+        prompt=search_query,
+        top_n=12,
+        genre_filter=genre_filters or None,
+        min_rating=min_rating_filter,
+        year_range=year_range_filter,
+        max_runtime=runtime_range_filter[1],
+        min_relevance=min_prompt_relevance,
+        min_runtime=runtime_range_filter[0],
+        min_votes=min_votes_filter,
+    )
+    search_results = pd.DataFrame(recommendations)
+    poster_cache = st.session_state["catalog_tmdb_poster_cache"]
+    details_cache = st.session_state["catalog_tmdb_details_cache"]
+
+    if tmdb.is_configured:
+        for movie in search_results.to_dict(orient="records"):
+            title_year = (str(movie["title"]).casefold(), int(movie["year"]))
+            if title_year not in poster_cache:
+                try:
+                    title_results = tmdb.search_movies(str(movie["title"]))
+                except requests.RequestException as error:
+                    show_tmdb_error(f"Could not load details for {movie['title']}", error)
+                    break
+                matched_movies, _ = tmdb.match_catalog_search_posters(
+                    [movie],
+                    title_results,
+                )
+                poster_cache[title_year] = matched_movies.get(title_year)
+
+            tmdb_match = poster_cache.get(title_year)
+            movie_id = tmdb_match.get("tmdb_id") if tmdb_match else None
+            if movie_id and movie_id not in details_cache:
+                try:
+                    details = tmdb.get_movie_details(movie_id)
+                except requests.RequestException as error:
+                    details_cache[movie_id] = None
+                    show_tmdb_error(f"Could not load details for {movie['title']}", error)
+                else:
+                    details_cache[movie_id] = tmdb.format_tmdb_movie(details)
+
+    if search_results.empty:
+        st.info(
+            "No recommendations meet the prompt and active filters. "
+            "Lower the minimum relevance or try describing a genre, mood, story, "
+            "actor, director, or movie title."
+        )
+    else:
+        st.caption(
+            f"Top {len(search_results)} recommendations ranked by story, genre, "
+            "cast, keywords, and other movie details."
+        )
+        search_cols = st.columns(3)
+        detail_fields = (
+            "certification",
             "genres",
             "director",
             "cast",
-            "moods",
+            "rating",
+            "votes",
+            "runtime",
             "tagline",
             "overview",
             "keywords",
+            "box_office",
+            "budget",
+            "revenue",
+            "status",
+            "original_language",
         )
-        if column in df.columns
-    ]
-    searchable_movies = df[search_columns].fillna("").astype(str).agg(" ".join, axis=1)
-    search_results = df[
-        searchable_movies.str.contains(search_query.strip(), case=False, regex=False)
-    ].copy()
-    search_results = search_results[
-        (search_results["rating"] >= min_rating_filter)
-        & search_results["year"].between(*year_range_filter)
-    ]
-    if max_runtime_val:
-        search_results = search_results[search_results["runtime"] <= max_runtime_val]
-    if genre_filters:
-        selected_genres = set(genre_filters)
-        search_results = search_results[
-            search_results["genres"].apply(
-                lambda value: bool(
-                    selected_genres.intersection(
-                        genre.strip() for genre in str(value).split(",")
-                    )
-                )
-            )
-        ]
-    search_results = search_results.sort_values(
-        ["rating", "votes"], ascending=False
-    ).head(12)
-
-    st.markdown(f"### 🔎 Search results for “{search_query.strip()}”")
-    if search_results.empty:
-        st.info("No catalog movies match that keyword and the active filters.")
-    else:
-        st.caption(f"Showing {len(search_results)} matching catalog movies.")
-        search_cols = st.columns(3)
         for index, (_, movie_row) in enumerate(search_results.iterrows()):
             with search_cols[index % 3]:
+                movie = movie_row.to_dict()
+                title_year = (str(movie["title"]).casefold(), int(movie["year"]))
+                tmdb_match = poster_cache.get(title_year)
+                if tmdb_match:
+                    for field in detail_fields:
+                        value = tmdb_match.get(field)
+                        if value not in (None, "", 0):
+                            movie[field] = value
+                    tmdb_id = tmdb_match.get("tmdb_id")
+                    tmdb_details = details_cache.get(tmdb_id) if tmdb_id else None
+                    if tmdb_details:
+                        for field in detail_fields:
+                            value = tmdb_details.get(field)
+                            if value not in (None, "", 0):
+                                movie[field] = value
+                    movie["poster_url"] = (
+                        (tmdb_details or {}).get("poster_url")
+                        or tmdb_match.get("poster_url")
+                        or ""
+                    )
+                    movie["backdrop_url"] = (
+                        (tmdb_details or {}).get("backdrop_url")
+                        or tmdb_match.get("backdrop_url")
+                        or ""
+                    )
+                else:
+                    movie["poster_url"] = ""
                 render_cinema_card(
-                    movie_row.to_dict(),
+                    movie,
                     key_prefix=f"catalog_search_{index}",
+                    show_full_details=True,
                 )
 
 # -------------------------------------------------------------
@@ -622,21 +895,19 @@ tab_cats, tab_match, tab_blend, tab_mood, tab_roulette, tab_tmdb, tab_watchlist,
 # TAB 0: CINEMA CATEGORIES & CHANNELS
 # =============================================================
 with tab_cats:
-    st.subheader("🎞️ Cinema Categories & Channels")
-    st.write("Browse dedicated collections crafted for anime lovers, recent theatrical releases, grand dramas, action sagas, historic epics, and romances.")
+    st.subheader("🎞️ Browse the collection")
+    st.write("Choose a collection, tune the filters above, and sort the results to fit your movie night.")
 
-    # Category Selector Pills
     cat_keys = list(CATEGORIES.keys())
-    active_cat = st.session_state.get("active_category", cat_keys[0])
-
-    c_pills = st.columns(len(cat_keys))
-    for idx, c_name in enumerate(cat_keys):
-        with c_pills[idx]:
-            is_active = (c_name == active_cat)
-            btn_style = "primary" if is_active else "secondary"
-            if st.button(c_name, key=f"cat_pill_{idx}", type=btn_style, use_container_width=True):
-                st.session_state["active_category"] = c_name
-                st.rerun()
+    current_category = st.session_state.get("active_category", cat_keys[0])
+    selected_category_index = cat_keys.index(current_category) if current_category in cat_keys else 0
+    active_cat = st.selectbox(
+        "Collection",
+        options=cat_keys,
+        index=selected_category_index,
+        key="active_category",
+        label_visibility="collapsed",
+    )
 
     active_cat_data = CATEGORIES[active_cat]
 
@@ -657,19 +928,51 @@ with tab_cats:
             horizontal=True,
             key=f"feed_mode_{active_cat}"
         )
+    with col_mode2:
+        category_sort = st.selectbox(
+            "Sort collection",
+            options=[
+                "Collection order",
+                "Top rated",
+                "Most votes",
+                "Newest",
+                "Oldest",
+                "Shortest runtime",
+                "Longest runtime",
+            ],
+            key=f"category_sort_{active_cat}",
+        )
 
     if feed_mode == "🎬 Curated HD Collection":
         cat_df = active_cat_data["filter"](df)
 
-        # Apply global filters
-        if min_rating_filter > 0:
-            cat_df = cat_df[cat_df["rating"] >= min_rating_filter]
-        if max_runtime_val:
-            cat_df = cat_df[cat_df["runtime"] <= max_runtime_val]
+        cat_df = cat_df[
+            (cat_df["rating"] >= min_rating_filter)
+            & cat_df["year"].between(*year_range_filter)
+            & cat_df["runtime"].between(*runtime_range_filter)
+            & (cat_df["votes"] >= min_votes_filter)
+        ]
+        if genre_filters:
+            selected_genres = set(genre_filters)
+            cat_df = cat_df[
+                cat_df["genres"].apply(lambda value: matches_any_genre(value, selected_genres))
+            ]
 
-        st.caption(f"Showing **{len(cat_df)}** films in {active_cat}:")
+        catalog_sort_columns = {
+            "Top rated": ("rating", False),
+            "Most votes": ("votes", False),
+            "Newest": ("year", False),
+            "Oldest": ("year", True),
+            "Shortest runtime": ("runtime", True),
+            "Longest runtime": ("runtime", False),
+        }
+        if category_sort in catalog_sort_columns:
+            sort_column, ascending = catalog_sort_columns[category_sort]
+            cat_df = cat_df.sort_values(sort_column, ascending=ascending)
+
+        st.caption(f"Showing **{len(cat_df)}** films in {active_cat} after applying your filters.")
         if cat_df.empty:
-            st.warning("No films found with current rating/runtime filters. Try relaxing filters in the sidebar!")
+            st.warning("No films match these filters. Try widening the year or runtime range, lowering the rating/vote minimum, or removing a genre.")
         else:
             cols = st.columns(3)
             for idx, (_, movie_row) in enumerate(cat_df.iterrows()):
@@ -680,12 +983,48 @@ with tab_cats:
         with st.spinner(f"Pulling live {active_cat} feed from TMDB..."):
             tmdb_cat_results = tmdb.get_category_feed(active_cat_data["tmdb_key"])
 
+        tmdb_cat_results = load_tmdb_runtimes(tmdb_cat_results)
+        selected_genre_ids = (
+            tmdb.genre_ids_for_names(genre_filters) if genre_filters else None
+        )
+        runtime_filter = (
+            None if runtime_range_filter == runtime_bounds else runtime_range_filter
+        )
+        filtered_category_results = tmdb.filter_movie_results(
+            tmdb_cat_results,
+            genre_ids=selected_genre_ids,
+            min_rating=min_rating_filter,
+            year_range=year_range_filter,
+            runtime_range=runtime_filter,
+            min_votes=min_votes_filter,
+        )
+        tmdb_sort_columns = {
+            "Top rated": ("vote_average", False),
+            "Most votes": ("vote_count", False),
+            "Newest": ("release_date", False),
+            "Oldest": ("release_date", True),
+            "Shortest runtime": ("runtime", True),
+            "Longest runtime": ("runtime", False),
+        }
+        if category_sort in tmdb_sort_columns:
+            sort_column, ascending = tmdb_sort_columns[category_sort]
+            filtered_category_results = sorted(
+                filtered_category_results,
+                key=lambda item: item.get(sort_column) or 0,
+                reverse=not ascending,
+            )
+
         if not tmdb_cat_results:
             st.warning("Could not fetch live TMDB feed. Check your connection or explore the Curated HD Collection!")
+        elif not filtered_category_results:
+            st.warning("No live titles match these filters. Try widening the year or runtime range, lowering the rating/vote minimum, or removing a genre.")
         else:
-            st.caption(f"Showing live feed (**{len(tmdb_cat_results)}** titles from TMDB):")
+            st.caption(
+                f"Showing **{len(filtered_category_results)} of {len(tmdb_cat_results)}** "
+                "live TMDB titles after applying your filters."
+            )
             t_cols = st.columns(3)
-            for idx, item in enumerate(tmdb_cat_results[:15]):
+            for idx, item in enumerate(filtered_category_results[:15]):
                 with t_cols[idx % 3]:
                     tmdb_id = item.get("id")
                     title = item.get("title") or item.get("name") or "Unknown"
@@ -693,10 +1032,10 @@ with tab_cats:
                     year = rel_date[:4] if rel_date else "2024"
                     vote_avg = round(float(item.get("vote_average", 0.0)), 1)
                     poster_p = item.get("poster_path")
-                    p_url = f"https://image.tmdb.org/t/p/w500{poster_p}" if poster_p else "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=600&auto=format&fit=crop&q=80"
+                    p_url = f"https://image.tmdb.org/t/p/w500{poster_p}" if poster_p else ""
 
                     st.markdown('<div class="cinema-card">', unsafe_allow_html=True)
-                    st.image(p_url, use_container_width=True)
+                    render_movie_poster({"poster_url": p_url})
                     st.markdown(f"#### {title} <span style='font-size:0.85rem; color:#94a3b8;'>({year})</span>", unsafe_allow_html=True)
                     st.markdown(f"<span class='rating-pill'>⭐ {vote_avg} / 10</span>", unsafe_allow_html=True)
                     st.caption(item.get("overview", "")[:120] + "...")
@@ -745,9 +1084,7 @@ with tab_match:
         with p_cols[idx]:
             film_row = df[df["title"] == f_title]
             if not film_row.empty:
-                poster = film_row.iloc[0].get("poster_url")
-                if poster:
-                    st.image(poster, use_container_width=True)
+                render_movie_poster(film_row.iloc[0].to_dict())
             if st.button(label, key=f"v_seed_{idx}", use_container_width=True):
                 st.session_state["selected_movie_for_search"] = f_title
                 st.rerun()
@@ -768,7 +1105,8 @@ with tab_match:
 
     if selected_movie_title:
         source_movie = recommender.get_movie_by_title(selected_movie_title)
-        backdrop = source_movie.get("backdrop_url") or source_movie.get("poster_url")
+        backdrop_candidate = source_movie.get("backdrop_url") or source_movie.get("poster_url")
+        backdrop = backdrop_candidate if is_verified_tmdb_art(backdrop_candidate) else ""
 
         # WIDESCREEN CINEMA BILLBOARD
         st.markdown(f"""
@@ -800,7 +1138,9 @@ with tab_match:
             genre_filter=genre_filters if genre_filters else None,
             min_rating=min_rating_filter,
             year_range=year_range_filter,
-            max_runtime=max_runtime_val
+            max_runtime=runtime_range_filter[1],
+            min_runtime=runtime_range_filter[0],
+            min_votes=min_votes_filter,
         )
 
         if not recs:
@@ -849,16 +1189,16 @@ with tab_blend:
         idx_b1 = all_titles.index(cur_b1) if cur_b1 in all_titles else 0
         blend_movie_1 = st.selectbox("Film #1:", options=all_titles, index=idx_b1, key="sb_b1")
         m1_data = recommender.get_movie_by_title(blend_movie_1)
-        if m1_data is not None and m1_data.get("poster_url"):
-            st.image(m1_data["poster_url"], width=200)
+        if m1_data is not None:
+            render_movie_poster(m1_data, width=200)
 
     with b_col2:
         cur_b2 = st.session_state.get("blend_2", "Blade Runner 2049")
         idx_b2 = all_titles.index(cur_b2) if cur_b2 in all_titles else 1
         blend_movie_2 = st.selectbox("Film #2:", options=all_titles, index=idx_b2, key="sb_b2")
         m2_data = recommender.get_movie_by_title(blend_movie_2)
-        if m2_data is not None and m2_data.get("poster_url"):
-            st.image(m2_data["poster_url"], width=200)
+        if m2_data is not None:
+            render_movie_poster(m2_data, width=200)
 
     include_third = st.checkbox("➕ Add a 3rd Film to the Blend?")
     blend_titles = [blend_movie_1, blend_movie_2]
@@ -874,7 +1214,9 @@ with tab_blend:
                 genre_filter=genre_filters if genre_filters else None,
                 min_rating=min_rating_filter,
                 year_range=year_range_filter,
-                max_runtime=max_runtime_val
+                max_runtime=runtime_range_filter[1],
+                min_runtime=runtime_range_filter[0],
+                min_votes=min_votes_filter,
             )
 
             if not blend_recs:
@@ -946,7 +1288,9 @@ with tab_mood:
             preferred_genres=genre_filters if genre_filters else None,
             min_rating=min_rating_filter,
             year_range=year_range_filter,
-            max_runtime=max_runtime_val,
+            max_runtime=runtime_range_filter[1],
+            min_runtime=runtime_range_filter[0],
+            min_votes=min_votes_filter,
             top_n=6
         )
 
@@ -974,12 +1318,21 @@ with tab_roulette:
 
     if spin_btn:
         candidates = df.copy()
-        if min_rating_filter > 0:
-            candidates = candidates[candidates["rating"] >= min_rating_filter]
-        if max_runtime_val:
-            candidates = candidates[candidates["runtime"] <= max_runtime_val]
+        candidates = candidates[
+            (candidates["rating"] >= min_rating_filter)
+            & candidates["year"].between(*year_range_filter)
+            & candidates["runtime"].between(*runtime_range_filter)
+            & (candidates["votes"] >= min_votes_filter)
+        ]
+        selected_genres = set(genre_filters)
         if roulette_genre != "Any Genre":
-            candidates = candidates[candidates["genres"].str.contains(roulette_genre, na=False)]
+            selected_genres.add(roulette_genre)
+        if selected_genres:
+            candidates = candidates[
+                candidates["genres"].apply(
+                    lambda value: matches_any_genre(value, selected_genres)
+                )
+            ]
 
         if candidates.empty:
             st.error("No movies found with those strict constraints! Try relaxing filters in the sidebar.")
@@ -988,7 +1341,8 @@ with tab_roulette:
             st.balloons()
             st.success(f"🎉 Destined for Tonight: **{chosen['title']}** ({chosen['year']})!")
 
-            bd_url = chosen.get("backdrop_url") or chosen.get("poster_url")
+            bd_candidate = chosen.get("backdrop_url") or chosen.get("poster_url")
+            bd_url = bd_candidate if is_verified_tmdb_art(bd_candidate) else ""
             st.markdown(f"""
             <div class="billboard-container" style="background-image: url('{bd_url}');">
                 <div class="billboard-overlay">
@@ -1096,7 +1450,7 @@ with tab_tmdb:
                             "TMDB returned no new titles for this import. Try again later."
                         )
                     except requests.RequestException as error:
-                        st.error(f"Could not expand the catalog from TMDB: {error}")
+                        show_tmdb_error("Could not expand the catalog from TMDB", error)
 
     tmdb_results = []
     if tmdb_mode == "🎯 Recommendations for a Movie":
@@ -1118,7 +1472,7 @@ with tab_tmdb:
                             recommendation_query
                         )
                 except requests.RequestException as error:
-                    st.error(f"TMDB movie search failed: {error}")
+                    show_tmdb_error("TMDB movie search", error)
 
         recommendation_seeds = st.session_state.get("tmdb_recommendation_seeds", [])
         if recommendation_seeds:
@@ -1136,7 +1490,7 @@ with tab_tmdb:
                 with st.spinner("Finding movies recommended by TMDB..."):
                     tmdb_results = tmdb.get_movie_recommendations(seed_movie["id"])
             except requests.RequestException as error:
-                st.error(f"TMDB recommendations could not be loaded: {error}")
+                show_tmdb_error("TMDB recommendations could not be loaded", error)
             st.caption(f"Recommendations based on **{seed_movie.get('title', 'your movie')}**.")
         elif search_submitted and recommendation_query.strip():
             st.info("TMDB did not find a matching movie. Try another title.")
@@ -1157,9 +1511,10 @@ with tab_tmdb:
                     if search_query:
                         tmdb_results = tmdb.search_movies(search_query)
         except requests.RequestException as error:
-            st.error(f"TMDB request failed: {error}")
+            show_tmdb_error("TMDB request", error)
 
     if tmdb_results:
+        tmdb_results = load_tmdb_runtimes(tmdb_results)
         selected_genre_ids = (
             tmdb.genre_ids_for_names(genre_filters) if genre_filters else None
         )
@@ -1168,10 +1523,14 @@ with tab_tmdb:
             genre_ids=selected_genre_ids,
             min_rating=min_rating_filter,
             year_range=year_range_filter,
+            runtime_range=(
+                None if runtime_range_filter == runtime_bounds else runtime_range_filter
+            ),
+            min_votes=min_votes_filter,
         )
         st.markdown(
             f"Showing **{len(filtered_results)} of {len(tmdb_results)}** TMDB movies "
-            "after applying your rating, release-year, and genre filters."
+            "after applying your filters."
         )
         if not filtered_results:
             st.warning("No TMDB movies match the current filters. Try relaxing them in the sidebar.")
@@ -1203,7 +1562,7 @@ with tab_tmdb:
                                 st.toast(f"Imported '{title}'! Recommender retrained.")
                                 st.rerun()
                         except requests.RequestException as error:
-                            st.error(f"Could not import '{title}': {error}")
+                            show_tmdb_error(f"Could not import '{title}'", error)
 
 
 # =============================================================
@@ -1223,7 +1582,16 @@ with tab_watchlist:
             saved_titles = [m["title"] for m in watchlist if "title" in m]
             if st.button("🧬 Synthesize Taste Profile Recommendations", type="primary", use_container_width=True):
                 with st.spinner("Analyzing your collective taste profile..."):
-                    profile_recs = recommender.recommend_for_watchlist(saved_titles, top_n=6)
+                    profile_recs = recommender.recommend_for_watchlist(
+                        saved_titles,
+                        top_n=6,
+                        genre_filter=genre_filters or None,
+                        min_rating=min_rating_filter,
+                        year_range=year_range_filter,
+                        min_runtime=runtime_range_filter[0],
+                        max_runtime=runtime_range_filter[1],
+                        min_votes=min_votes_filter,
+                    )
                     if profile_recs:
                         st.markdown("### 🧬 Recommended Specifically for Your Taste Profile:")
                         p_cols = st.columns(3)

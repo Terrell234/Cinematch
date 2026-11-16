@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -13,8 +14,60 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 
 DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "movies.csv"
-TEXT_COLUMNS = ("genres", "director", "cast", "moods", "overview", "keywords")
+TEXT_COLUMNS = (
+    "title",
+    "genres",
+    "director",
+    "cast",
+    "moods",
+    "tagline",
+    "overview",
+    "keywords",
+    "certification",
+)
 REQUIRED_COLUMNS = ("id", "title", "year", "genres", "director", "cast", "rating", "votes", "runtime")
+PROMPT_EXPANSIONS = {
+    "family friendly": "children kids animation heartwarming",
+    "family-friendly": "children kids animation heartwarming",
+    "female lead": "female protagonist heroine woman female gaze female prisoners",
+    "strong female lead": "female protagonist heroine woman female gaze female prisoners",
+    "funny": "comedy humorous hilarious witty",
+    "hilarious": "comedy humorous funny witty",
+    "scary": "horror frightening terrifying disturbing",
+    "space": "science fiction sci-fi space travel astronaut planet cosmic",
+    "psychological": "mind-bending paranoia identity surreal",
+    "grief": "loss mourning trauma healing recovery",
+    "healing": "grief loss recovery resilience hope",
+    "inspiring": "hope resilience triumph uplifting",
+}
+PROMPT_GENRE_ALIASES = {
+    "Action": ("action", "action-packed"),
+    "Adventure": ("adventure",),
+    "Animation": ("animation", "animated", "cartoon"),
+    "Comedy": ("comedy", "funny", "humorous", "hilarious"),
+    "Crime": ("crime", "criminal"),
+    "Drama": ("drama",),
+    "Family": (
+        "family film",
+        "family movie",
+        "family comedy",
+        "family friendly",
+        "family-friendly",
+        "kids",
+        "kids movie",
+        "children's movie",
+        "children's film",
+    ),
+    "Fantasy": ("fantasy", "magical"),
+    "History": ("history", "historical"),
+    "Horror": ("horror", "scary", "frightening", "terrifying"),
+    "Mystery": ("mystery", "detective", "whodunit"),
+    "Romance": ("romance", "romantic", "love story"),
+    "Sci-Fi": ("sci-fi", "sci fi", "science fiction", "space", "space travel"),
+    "Thriller": ("thriller", "suspense", "suspenseful"),
+    "War": ("war",),
+    "Western": ("western",),
+}
 
 
 @st.cache_data(show_spinner=False)
@@ -37,13 +90,26 @@ def load_movie_data() -> pd.DataFrame:
             frame[column] = ""
         frame[column] = frame[column].fillna("").astype(str)
 
-    for column in ("tagline", "poster_url", "backdrop_url", "trailer_url", "box_office"):
+    for column in (
+        "tagline",
+        "poster_url",
+        "backdrop_url",
+        "trailer_url",
+        "box_office",
+        "certification",
+        "status",
+        "original_language",
+    ):
         if column not in frame:
             frame[column] = ""
         frame[column] = frame[column].fillna("").astype(str)
 
     for column in ("year", "rating", "votes", "runtime"):
         frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    for column in ("budget", "revenue"):
+        if column not in frame:
+            frame[column] = 0
+        frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0)
     frame = frame.dropna(subset=["title", "year", "rating", "runtime"])
     frame["title"] = frame["title"].astype(str)
     return frame.reset_index(drop=True)
@@ -128,6 +194,8 @@ class MovieRecommender:
         min_rating: float = 0,
         year_range: tuple[int, int] | None = None,
         max_runtime: int | None = None,
+        min_runtime: int | None = None,
+        min_votes: int = 0,
     ) -> list[int]:
         excluded = {title.casefold() for title in (excluded_titles or set())}
         genres = set(genre_filter or [])
@@ -139,7 +207,11 @@ class MovieRecommender:
                 continue
             if year_range and not (year_range[0] <= int(row["year"]) <= year_range[1]):
                 continue
+            if min_runtime is not None and float(row["runtime"]) < min_runtime:
+                continue
             if max_runtime and float(row["runtime"]) > max_runtime:
+                continue
+            if int(row["votes"]) < min_votes:
                 continue
             if genres and not genres.intersection(self._split(row["genres"])):
                 continue
@@ -161,7 +233,9 @@ class MovieRecommender:
         genre_filter: list[str] | None = None,
         min_rating: float = 0,
         year_range: tuple[int, int] | None = None,
+        min_runtime: int | None = None,
         max_runtime: int | None = None,
+        min_votes: int = 0,
     ) -> list[dict[str, Any]]:
         seed_index = self._title_indices.get(str(title).casefold())
         if seed_index is None:
@@ -171,7 +245,9 @@ class MovieRecommender:
             genre_filter=genre_filter,
             min_rating=min_rating,
             year_range=year_range,
+            min_runtime=min_runtime,
             max_runtime=max_runtime,
+            min_votes=min_votes,
         )
         scores = sorted(
             ((index, float(self.similarity[seed_index, index])) for index in eligible),
@@ -198,6 +274,123 @@ class MovieRecommender:
                 result["match_reasons"] = reasons
         return results
 
+    def recommend_for_prompt(
+        self,
+        prompt: str,
+        top_n: int = 12,
+        genre_filter: list[str] | None = None,
+        min_rating: float = 0,
+        year_range: tuple[int, int] | None = None,
+        max_runtime: int | None = None,
+        min_relevance: float = 0,
+        min_runtime: int | None = None,
+        min_votes: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Recommend catalog movies whose metadata best matches a free-text prompt."""
+        query = str(prompt or "").strip()
+        if not query:
+            return []
+
+        mentioned_titles = []
+        for title in self._title_indices:
+            title_pattern = re.escape(title)
+            if query.casefold() == title or re.search(
+                rf"\b(?:like|similar to|related to|inspired by|based on|after|if i liked)\s+"
+                rf"{title_pattern}(?!\w)",
+                query,
+                flags=re.IGNORECASE,
+            ):
+                mentioned_titles.append(title)
+        if mentioned_titles:
+            seed_title = max(mentioned_titles, key=len)
+            results = self.recommend_similar(
+                title=seed_title,
+                top_n=top_n,
+                genre_filter=genre_filter,
+                min_rating=min_rating,
+                year_range=year_range,
+                min_runtime=min_runtime,
+                max_runtime=max_runtime,
+                min_votes=min_votes,
+            )
+            return [
+                movie
+                for movie in results
+                if movie["match_percentage"] >= min_relevance
+            ]
+
+        available_genres = {genre.casefold(): genre for genre in self.get_all_genres()}
+        prompt_genres = {
+            available_genres[genre.casefold()]
+            for genre, aliases in PROMPT_GENRE_ALIASES.items()
+            if genre.casefold() in available_genres
+            and any(
+                re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", query, flags=re.IGNORECASE)
+                for alias in aliases
+            )
+        }
+        expanded_terms = [
+            expansion
+            for phrase, expansion in PROMPT_EXPANSIONS.items()
+            if re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", query, flags=re.IGNORECASE)
+        ]
+        expanded_query = " ".join([query, *expanded_terms])
+        query_vector = self.vectorizer.transform([expanded_query])
+        if not query_vector.nnz:
+            return []
+
+        eligible = self._eligible(
+            genre_filter=genre_filter,
+            min_rating=min_rating,
+            year_range=year_range,
+            min_runtime=min_runtime,
+            max_runtime=max_runtime,
+            min_votes=min_votes,
+        )
+        if prompt_genres:
+            eligible = [
+                index
+                for index in eligible
+                if prompt_genres.issubset(self._split(self.movies.iloc[index]["genres"]))
+            ]
+
+        query_terms = set(self.vectorizer.build_analyzer()(expanded_query))
+        scores = [
+            (index, float(cosine_similarity(query_vector, self.matrix[index]).ravel()[0]))
+            for index in eligible
+        ]
+        scores = [
+            item
+            for item in scores
+            if item[1] > 0 and item[1] * 100 >= min_relevance
+        ]
+        scores.sort(
+            key=lambda item: (
+                item[1],
+                float(self.movies.iloc[item[0]]["rating"]),
+                int(self.movies.iloc[item[0]]["votes"]),
+            ),
+            reverse=True,
+        )
+
+        results = self._format_results(scores, top_n)
+        for result, (index, _) in zip(results, scores):
+            movie_terms = set(
+                self.vectorizer.build_analyzer()(
+                    " ".join(
+                        str(self.movies.iloc[index].get(column, ""))
+                        for column in TEXT_COLUMNS
+                    )
+                )
+            )
+            shared_terms = sorted(query_terms & movie_terms)
+            result["match_reasons"] = (
+                [f"Related themes: {', '.join(shared_terms[:3])}"]
+                if shared_terms
+                else []
+            )
+        return results
+
     def recommend_cinema_blend(
         self,
         titles: list[str],
@@ -206,6 +399,8 @@ class MovieRecommender:
         min_rating: float = 0,
         year_range: tuple[int, int] | None = None,
         max_runtime: int | None = None,
+        min_runtime: int | None = None,
+        min_votes: int = 0,
     ) -> list[dict[str, Any]]:
         indices = [self._title_indices[t.casefold()] for t in titles if t.casefold() in self._title_indices]
         if not indices:
@@ -217,7 +412,9 @@ class MovieRecommender:
             genre_filter=genre_filter,
             min_rating=min_rating,
             year_range=year_range,
+            min_runtime=min_runtime,
             max_runtime=max_runtime,
+            min_votes=min_votes,
         ):
             score = float(cosine_similarity(centroid, self.matrix[index]).ravel()[0])
             scores.append((index, score))
@@ -232,6 +429,8 @@ class MovieRecommender:
         year_range: tuple[int, int] | None = None,
         max_runtime: int | None = None,
         top_n: int = 6,
+        min_runtime: int | None = None,
+        min_votes: int = 0,
     ) -> list[dict[str, Any]]:
         selected = {mood.casefold() for mood in selected_moods}
         scores = []
@@ -239,7 +438,9 @@ class MovieRecommender:
             genre_filter=preferred_genres,
             min_rating=min_rating,
             year_range=year_range,
+            min_runtime=min_runtime,
             max_runtime=max_runtime,
+            min_votes=min_votes,
         ):
             moods = {mood.casefold() for mood in self._split(self.movies.iloc[index]["moods"])}
             overlap = len(selected & moods) / max(1, len(selected))
@@ -248,13 +449,32 @@ class MovieRecommender:
         scores.sort(key=lambda item: item[1], reverse=True)
         return self._format_results(scores, top_n)
 
-    def recommend_for_watchlist(self, titles: list[str], top_n: int = 6) -> list[dict[str, Any]]:
+    def recommend_for_watchlist(
+        self,
+        titles: list[str],
+        top_n: int = 6,
+        *,
+        genre_filter: list[str] | None = None,
+        min_rating: float = 0,
+        year_range: tuple[int, int] | None = None,
+        min_runtime: int | None = None,
+        max_runtime: int | None = None,
+        min_votes: int = 0,
+    ) -> list[dict[str, Any]]:
         indices = [self._title_indices[t.casefold()] for t in titles if t.casefold() in self._title_indices]
         if not indices:
             return []
         centroid = np.asarray(self.matrix[indices].mean(axis=0))
         scores = []
-        for index in self._eligible(excluded_titles=set(titles)):
+        for index in self._eligible(
+            excluded_titles=set(titles),
+            genre_filter=genre_filter,
+            min_rating=min_rating,
+            year_range=year_range,
+            min_runtime=min_runtime,
+            max_runtime=max_runtime,
+            min_votes=min_votes,
+        ):
             scores.append((index, float(cosine_similarity(centroid, self.matrix[index]).ravel()[0])))
         scores.sort(key=lambda item: item[1], reverse=True)
         return self._format_results(scores, top_n)
