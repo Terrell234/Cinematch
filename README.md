@@ -6,7 +6,7 @@ Recommendation cards show the catalog's available information. With `TMDB_API_KE
 
 Movie artwork is displayed only from TMDB's image host. Posters on catalog movie cards throughout the app are accepted only when a TMDB result exactly matches both the movie title and release year; otherwise the app shows a neutral placeholder instead of unrelated artwork. Live TMDB feeds use the poster attached to the same TMDB movie record.
 
-Movie collections, recommendation cards, roulette picks, and saved-movie cards omit titles without a verified poster. Connect a TMDB key or read token to display the curated catalog.
+Movie collections, recommendation cards, roulette picks, and saved-movie cards omit titles without a verified poster. Connect a TMDB key or read token to display the curated catalog. The Browse tab includes an Upcoming Movies category powered by TMDB, with the same genre, rating, year, runtime, vote, poster, trailer, sorting, and import features as the other live categories.
 
 When direct similar-movie or prompt matches are unavailable, CineMatch offers clearly labeled preference alternatives. It keeps genre and rating preferences when possible, and explains when it relaxes year, runtime, vote-count, or genre filters to find more options.
 

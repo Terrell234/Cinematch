@@ -93,6 +93,30 @@ class TMDBClientTests(unittest.TestCase):
             timeout=12,
         )
 
+    def test_upcoming_movies_use_tmdb_endpoint(self):
+        client = TMDBClient("test-key")
+        response = Mock()
+        response.json.return_value = {"results": [{"id": 42, "title": "A Movie"}]}
+        response.raise_for_status.return_value = None
+        client.session.get = Mock(return_value=response)
+
+        results = client.get_upcoming_movies(page=2)
+
+        self.assertEqual(results, [{"id": 42, "title": "A Movie"}])
+        client.session.get.assert_called_once_with(
+            "https://api.themoviedb.org/3/movie/upcoming",
+            params={"api_key": "test-key", "page": 2},
+            timeout=12,
+        )
+
+    def test_upcoming_category_uses_upcoming_feed(self):
+        client = TMDBClient("test-key")
+        with patch.object(client, "get_upcoming_movies", return_value=[{"id": 42}]) as upcoming:
+            results = client.get_category_feed("upcoming")
+
+        self.assertEqual(results, [{"id": 42}])
+        upcoming.assert_called_once_with()
+
     def test_movie_details_request_credits_keywords_and_release_ratings(self):
         client = TMDBClient("test-key")
         response = Mock()

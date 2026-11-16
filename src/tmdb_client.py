@@ -136,6 +136,9 @@ class TMDBClient:
     def get_now_playing(self, page: int = 1) -> list[dict[str, Any]]:
         return self._get("movie/now_playing", {"page": page}).get("results", [])
 
+    def get_upcoming_movies(self, page: int = 1) -> list[dict[str, Any]]:
+        return self._get("movie/upcoming", {"page": page}).get("results", [])
+
     def get_top_rated(self, page: int = 1) -> list[dict[str, Any]]:
         return self._get("movie/top_rated", {"page": page}).get("results", [])
 
@@ -245,6 +248,8 @@ class TMDBClient:
     def get_category_feed(self, category: str) -> list[dict[str, Any]]:
         if category == "new":
             return self.get_now_playing()
+        if category == "upcoming":
+            return self.get_upcoming_movies()
         if category == "popular":
             return self.get_trending_movies()
         genre_id = self.GENRE_IDS.get(category.casefold())

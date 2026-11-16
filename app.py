@@ -897,6 +897,12 @@ CATEGORIES = {
         "color": "linear-gradient(135deg, #332319 0%, #1c1713 100%)",
         "tmdb_key": "new"
     },
+    "🎟️ Upcoming Movies": {
+        "desc": "Forthcoming films from TMDB, with current-year catalog titles available in the curated collection.",
+        "filter": lambda d: d[d["year"] >= date.today().year].sort_values(by="year", ascending=False),
+        "color": "linear-gradient(135deg, #392819 0%, #1c1713 100%)",
+        "tmdb_key": "upcoming"
+    },
     "🎭 Drama": {
         "desc": "Compelling character studies, psychological thrillers, and award-winning emotional masterworks.",
         "filter": lambda d: d[d["genres"].str.contains("Drama", na=False)].sort_values(by="rating", ascending=False),
@@ -1107,6 +1113,7 @@ with tab_cats:
             "Channel Source:",
             options=["🎬 Curated HD Collection", "🌐 Live TMDB Streaming Feed"],
             horizontal=True,
+            index=1 if active_cat_data["tmdb_key"] == "upcoming" else 0,
             key=f"feed_mode_{active_cat}"
         )
     with col_mode2:
@@ -1603,6 +1610,7 @@ with tab_tmdb:
         options=[
             "🔥 Trending This Week",
             "🎬 Now Playing in Theaters",
+            "🎟️ Upcoming Movies",
             "⭐ All-Time Top Rated",
             "🎯 Recommendations for a Movie",
             "🔍 Search TMDB Global Library",
@@ -1732,6 +1740,8 @@ with tab_tmdb:
                     tmdb_results = tmdb.get_trending_movies(time_window="week")
                 elif tmdb_mode == "🎬 Now Playing in Theaters":
                     tmdb_results = tmdb.get_now_playing(page=1)
+                elif tmdb_mode == "🎟️ Upcoming Movies":
+                    tmdb_results = tmdb.get_upcoming_movies(page=1)
                 elif tmdb_mode == "⭐ All-Time Top Rated":
                     tmdb_results = tmdb.get_top_rated(page=1)
                 elif tmdb_mode == "🔍 Search TMDB Global Library":
