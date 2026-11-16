@@ -38,26 +38,25 @@ Open [http://localhost:8501](http://localhost:8501). The bundled CSV contains th
    `TMDB_API_TOKEN` is also accepted if you use a TMDB read access token. The TMDB integration is optional; the curated catalog and recommendation features work without a credential. You can also enter a key or token in the app's **Configure TMDB API key** panel for the current session.
    After deployment, open **Filters and TMDB settings** and select **Test TMDB** to verify the secret is accepted and live movie data can be loaded.
 
-## GitHub accounts and watchlists
+## Google accounts and watchlists
 
-Visitors can browse without an account. Sign in with GitHub from the **Account** menu to save and manage a watchlist. CineMatch requests the GitHub `gist` OAuth scope and stores each user's list in a Gist associated with their GitHub account.
+Visitors can browse without an account. **Continue with Google** signs users in and automatically creates their CineMatch account the first time they authorize the app; no separate password signup is needed. CineMatch saves each user's watchlist in the private `appDataFolder` area of that user's Google Drive. The list is tied to their Google account and is restored when they sign in again. This app data is not shown in the normal Drive file list; it is accessible to CineMatch through the Google Drive API.
 
-**Gist visibility caveat:** the app creates a secret (unlisted) Gist using `public = false`. GitHub secret Gists are not private; anyone who obtains the Gist URL can view the contents. Do not save sensitive information in a CineMatch watchlist. You can delete the Gist from your GitHub Gists page. Logging out of CineMatch clears the local app session; you can revoke the app's GitHub access under [GitHub Settings → Applications](https://github.com/settings/applications).
+To configure sign-in and storage:
 
-To configure sign-in:
-
-1. Create a [GitHub OAuth App](https://github.com/settings/developers). Use your CineMatch app URL as the **Homepage URL** and the exact same URL as the **Authorization callback URL** (for example, `https://your-app.streamlit.app`). For local development, create a separate OAuth App with `http://localhost:8501` as its callback URL.
-2. In Streamlit Community Cloud, add the following under **App settings → Secrets**. For local development, copy `.env.example` to `.env` and fill in the same values.
+1. In [Google Cloud Console](https://console.cloud.google.com/), create or select a project and enable the **Google Drive API**.
+2. Configure the OAuth consent screen and create an **OAuth client ID** of type **Web application**. Add your deployed app URL (for example, `https://your-app.streamlit.app`) as an authorized redirect URI. For local development, create a separate client with `http://localhost:8501` as its authorized redirect URI. If the consent screen is in testing mode, add the accounts that should be able to sign in as test users.
+3. In Streamlit Community Cloud, add the following under **App settings → Secrets**. For local development, copy `.env.example` to `.env` and fill in the same values.
 
    ```toml
-   GITHUB_CLIENT_ID = "your-github-oauth-client-id"
-   GITHUB_CLIENT_SECRET = "your-github-oauth-client-secret"
-   GITHUB_REDIRECT_URL = "https://your-app.streamlit.app"
+   GOOGLE_CLIENT_ID = "your-google-oauth-client-id"
+   GOOGLE_CLIENT_SECRET = "your-google-oauth-client-secret"
+   GOOGLE_REDIRECT_URL = "https://your-app.streamlit.app"
    ```
 
-Keep the client secret only in Streamlit Secrets or your local `.env`; never commit it to GitHub. No Supabase project or database is required.
+Keep the client secret only in Streamlit Secrets or your local `.env`; never commit it to GitHub. CineMatch requests only identity information and the Google Drive app-data scope needed for its watchlist. Logging out clears the local app session; Google account access can be revoked in the Google Account's third-party connections settings.
 
-The OAuth access token is kept in the current Streamlit session. GitHub owns and stores the Gist; watchlist access is made through the signed-in user's token.
+Existing watchlists stored in GitHub Gists are not automatically migrated. They remain in GitHub, but the app no longer signs in with GitHub.
 
 ## Catalog tools
 

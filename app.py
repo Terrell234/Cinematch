@@ -29,7 +29,7 @@ from src.data_loader import (
     get_recommender,
     load_movie_data,
 )
-from src.account_store import AccountStoreError, GitHubGistAccountStore
+from src.account_store import AccountStoreError, GoogleDriveAccountStore
 from src.tmdb_client import TMDBClient
 
 # Page configuration
@@ -352,39 +352,39 @@ def read_app_secret(name: str) -> str:
     return str(value or os.environ.get(name, "")).strip()
 
 
-github_client_id = read_app_secret("GITHUB_CLIENT_ID")
-github_client_secret = read_app_secret("GITHUB_CLIENT_SECRET")
-github_redirect_url = read_app_secret("GITHUB_REDIRECT_URL")
+google_client_id = read_app_secret("GOOGLE_CLIENT_ID")
+google_client_secret = read_app_secret("GOOGLE_CLIENT_SECRET")
+google_redirect_url = read_app_secret("GOOGLE_REDIRECT_URL")
 account_config_error = None
 account_store = (
-    GitHubGistAccountStore(github_client_id, github_client_secret)
-    if github_client_id and github_client_secret
+    GoogleDriveAccountStore(google_client_id, google_client_secret)
+    if google_client_id and google_client_secret
     else None
 )
-github_oauth_configured = bool(account_store and github_redirect_url)
-github_oauth_cookie = "cinematch_github_oauth_state"
+google_oauth_configured = bool(account_store and google_redirect_url)
+google_oauth_cookie = "cinematch_google_oauth_state"
 
 
-def prepare_github_oauth_request() -> None:
+def prepare_google_oauth_request() -> None:
     global account_config_error
     if (
         account_store is None
-        or not github_redirect_url
+        or not google_redirect_url
         or st.session_state.get("account_session")
     ):
         return
-    oauth_request = st.session_state.get("github_oauth_request")
+    oauth_request = st.session_state.get("google_oauth_request")
     if not oauth_request or oauth_request.get("expires_at", 0) <= int(time.time()) + 60:
         try:
             state = secrets.token_urlsafe(32)
-            authorization_url = account_store.create_github_oauth_request(
-                github_redirect_url,
+            authorization_url = account_store.create_google_oauth_request(
+                google_redirect_url,
                 state,
             )
         except AccountStoreError as error:
             account_config_error = str(error)
         else:
-            st.session_state["github_oauth_request"] = {
+            st.session_state["google_oauth_request"] = {
                 "authorization_url": authorization_url,
                 "state": state,
                 "expires_at": int(time.time()) + 600,
@@ -398,7 +398,7 @@ def clear_account_session() -> None:
     st.session_state["watchlist_loaded"] = False
 
 
-def process_github_oauth_callback() -> None:
+def process_google_oauth_callback() -> None:
     code = str(st.query_params.get("code") or "")
     returned_state = str(st.query_params.get("state") or "")
     oauth_error = str(
@@ -411,35 +411,34 @@ def process_github_oauth_callback() -> None:
 
     try:
         if oauth_error:
-            raise AccountStoreError("GitHub sign-in was canceled or rejected.")
-        if account_store is None or not github_oauth_configured:
-            raise AccountStoreError("GitHub sign-in is not configured.")
-        oauth_request = st.session_state.get("github_oauth_request") or {}
+            raise AccountStoreError("Google sign-in was canceled or rejected.")
+        if account_store is None or not google_oauth_configured:
+            raise AccountStoreError("Google sign-in is not configured.")
+        oauth_request = st.session_state.get("google_oauth_request") or {}
         expected_state = str(oauth_request.get("state") or "")
-        browser_state = str(st.context.cookies.get(github_oauth_cookie, ""))
-        account_store.validate_github_oauth_state(
+        browser_state = str(st.context.cookies.get(google_oauth_cookie, ""))
+        account_store.validate_google_oauth_state(
             returned_state,
             expected_state,
             browser_state,
             int(oauth_request.get("expires_at") or 0),
         )
-        session = account_store.exchange_github_oauth_code(
+        session = account_store.exchange_google_oauth_code(
             auth_code=code,
-            state=returned_state,
-            redirect_url=github_redirect_url,
+            redirect_url=google_redirect_url,
         )
     except AccountStoreError as error:
-        st.session_state["account_message"] = f"GitHub sign-in failed: {error}"
+        st.session_state["account_message"] = f"Google sign-in failed: {error}"
     else:
         st.session_state["account_session"] = session
         st.session_state["watchlist_loaded"] = False
-        st.session_state["account_message"] = "Signed in with GitHub."
+        st.session_state["account_message"] = "Signed in with Google."
     finally:
-        st.session_state["github_oauth_request"] = None
+        st.session_state["google_oauth_request"] = None
         st.query_params.clear()
         cookie = (
-            f"{github_oauth_cookie}=; Path=/; Max-Age=0; SameSite=Lax"
-            + ("; Secure" if github_redirect_url.startswith("https://") else "")
+            f"{google_oauth_cookie}=; Path=/; Max-Age=0; SameSite=Lax"
+            + ("; Secure" if google_redirect_url.startswith("https://") else "")
         )
         components.html(
             f"<script>window.parent.document.cookie = {json.dumps(cookie)};</script>",
@@ -449,7 +448,7 @@ def process_github_oauth_callback() -> None:
 
 def log_out_account() -> None:
     clear_account_session()
-    st.session_state["github_oauth_request"] = None
+    st.session_state["google_oauth_request"] = None
     st.rerun()
 
 
@@ -462,10 +461,14 @@ def load_account_watchlist() -> tuple[dict | None, bool, str | None]:
         return None, False, None
     if account_store is None:
         clear_account_session()
-        return None, False, "GitHub account settings are missing."
-    if not session.get("login") or not session.get("user_id"):
+        return None, False, "Google account settings are missing."
+    if (
+        session.get("provider") != "google"
+        or not session.get("login")
+        or not session.get("user_id")
+    ):
         clear_account_session()
-        return None, False, "Please sign in with GitHub again to access your watchlist."
+        return None, False, "Please sign in with Google again to access your watchlist."
 
     expires_at = int(session.get("expires_at") or 0)
     if expires_at and expires_at <= int(time.time()) + 60:
@@ -492,8 +495,8 @@ def load_account_watchlist() -> tuple[dict | None, bool, str | None]:
     return session, True, None
 
 
-process_github_oauth_callback()
-prepare_github_oauth_request()
+process_google_oauth_callback()
+prepare_google_oauth_request()
 account_session, watchlist_ready, account_error = load_account_watchlist()
 
 
@@ -662,11 +665,11 @@ with account_column:
     with st.popover("👤 Account"):
         if account_store is None:
             st.info(
-                "GitHub accounts need `GITHUB_CLIENT_ID` and "
-                "`GITHUB_CLIENT_SECRET` in Streamlit Secrets."
+                "Google accounts need `GOOGLE_CLIENT_ID` and "
+                "`GOOGLE_CLIENT_SECRET` in Streamlit Secrets."
             )
         elif account_session:
-            st.caption(f"Signed in as **@{account_session['login']}**")
+            st.caption(f"Signed in as **{account_session.get('name') or account_session['login']}**")
             if not watchlist_ready:
                 st.warning("Your account is signed in, but the watchlist is unavailable.")
                 if account_error:
@@ -676,31 +679,31 @@ with account_column:
             if st.button("Log out", key="account_logout", use_container_width=True):
                 log_out_account()
         else:
-            oauth_request = st.session_state.get("github_oauth_request")
-            if github_oauth_configured and oauth_request:
+            oauth_request = st.session_state.get("google_oauth_request")
+            if google_oauth_configured and oauth_request:
                 cookie = (
-                    f"{github_oauth_cookie}={oauth_request['state']}; "
+                    f"{google_oauth_cookie}={oauth_request['state']}; "
                     "Path=/; Max-Age=600; SameSite=Lax"
-                    + ("; Secure" if github_redirect_url.startswith("https://") else "")
+                    + ("; Secure" if google_redirect_url.startswith("https://") else "")
                 )
                 components.html(
                     f"<script>window.parent.document.cookie = {json.dumps(cookie)};</script>",
                     height=0,
                 )
                 st.link_button(
-                    "Continue with GitHub",
+                    "Continue with Google",
                     href=oauth_request["authorization_url"],
                     type="primary",
                 )
                 st.caption(
-                    "Your watchlist is stored in an unlisted GitHub Gist. "
-                    "Secret Gists are not private; anyone with the Gist URL can view them."
+                    "Your watchlist is saved privately in your Google account and "
+                    "will be available when you sign in again."
                 )
-            elif github_oauth_configured:
-                st.error(account_config_error or "Could not prepare GitHub sign-in.")
+            elif google_oauth_configured:
+                st.error(account_config_error or "Could not prepare Google sign-in.")
             else:
                 st.info(
-                    "GitHub sign-in also needs `GITHUB_REDIRECT_URL` in Streamlit Secrets."
+                    "Google sign-in also needs `GOOGLE_REDIRECT_URL` in Streamlit Secrets."
                 )
             if account_error:
                 st.warning(account_error)

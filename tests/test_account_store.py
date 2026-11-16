@@ -1,22 +1,26 @@
 import json
 import time
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 from urllib.parse import parse_qs, urlparse
 
 from requests import HTTPError
 
-from src.account_store import AccountStoreError, GitHubGistAccountStore
+from src.account_store import AccountStoreError, GoogleDriveAccountStore
 
 
-class GitHubGistAccountStoreTests(unittest.TestCase):
+class GoogleDriveAccountStoreTests(unittest.TestCase):
     def setUp(self):
-        self.store = GitHubGistAccountStore("client-id", "client-secret")
+        self.store = GoogleDriveAccountStore("client-id", "client-secret")
         self.session = {
             "access_token": "user-access-token",
+            "refresh_token": "user-refresh-token",
             "expires_at": 1_900_000_000,
-            "user_id": "42",
-            "login": "movie-fan",
+            "user_id": "google-user-id",
+            "login": "movie-fan@example.com",
+            "email": "movie-fan@example.com",
+            "name": "Movie Fan",
+            "email_verified": True,
         }
 
     @staticmethod
@@ -28,22 +32,25 @@ class GitHubGistAccountStoreTests(unittest.TestCase):
         response.raise_for_status.return_value = None
         return response
 
-    def test_oauth_request_uses_gist_scope_and_csrf_state(self):
-        url = self.store.create_github_oauth_request(
+    def test_oauth_request_uses_identity_and_private_drive_scopes(self):
+        url = self.store.create_google_oauth_request(
             "https://cinematch.example",
             "one-time-state",
         )
         params = parse_qs(urlparse(url).query)
 
-        self.assertEqual(urlparse(url).netloc, "github.com")
+        self.assertEqual(urlparse(url).netloc, "accounts.google.com")
         self.assertEqual(params["client_id"], ["client-id"])
         self.assertEqual(params["redirect_uri"], ["https://cinematch.example"])
-        self.assertEqual(params["scope"], ["gist"])
+        self.assertIn("openid", params["scope"][0].split())
+        self.assertIn("email", params["scope"][0].split())
+        self.assertIn(self.store.DRIVE_APPDATA_SCOPE, params["scope"][0].split())
         self.assertEqual(params["state"], ["one-time-state"])
+        self.assertEqual(params["access_type"], ["offline"])
 
     def test_oauth_request_rejects_non_https_redirect(self):
         with self.assertRaisesRegex(AccountStoreError, "HTTPS"):
-            self.store.create_github_oauth_request(
+            self.store.create_google_oauth_request(
                 "http://cinematch.example",
                 "one-time-state",
             )
@@ -51,183 +58,166 @@ class GitHubGistAccountStoreTests(unittest.TestCase):
     def test_oauth_state_requires_matching_browser_and_unexpired_state(self):
         expires_at = int(time.time()) + 600
 
-        GitHubGistAccountStore.validate_github_oauth_state(
+        GoogleDriveAccountStore.validate_google_oauth_state(
             "state-123",
             "state-123",
             "state-123",
             expires_at,
         )
-        GitHubGistAccountStore.validate_github_oauth_state(
-            "state-123",
-            "",
-            "state-123",
-            0,
-        )
         with self.assertRaisesRegex(AccountStoreError, "state is invalid or expired"):
-            GitHubGistAccountStore.validate_github_oauth_state(
+            GoogleDriveAccountStore.validate_google_oauth_state(
+                "state-123",
+                "",
+                "state-123",
+                expires_at,
+            )
+        with self.assertRaisesRegex(AccountStoreError, "state is invalid or expired"):
+            GoogleDriveAccountStore.validate_google_oauth_state(
                 "state-123",
                 "different-state",
                 "state-123",
                 expires_at,
             )
         with self.assertRaisesRegex(AccountStoreError, "state is invalid or expired"):
-            GitHubGistAccountStore.validate_github_oauth_state(
+            GoogleDriveAccountStore.validate_google_oauth_state(
                 "state-123",
                 "state-123",
                 "state-123",
                 int(time.time()) - 1,
             )
         with self.assertRaisesRegex(AccountStoreError, "state is invalid or expired"):
-            GitHubGistAccountStore.validate_github_oauth_state(
+            GoogleDriveAccountStore.validate_google_oauth_state(
                 "state-123",
-                "",
+                "state-123",
                 "other-state",
-                0,
+                expires_at,
             )
 
     @patch("src.account_store.requests.request")
-    def test_code_exchange_returns_github_user_session(self, request):
+    def test_code_exchange_returns_verified_google_user_session(self, request):
         request.side_effect = [
             self.response(
                 {
                     "access_token": "access",
                     "refresh_token": "refresh",
                     "expires_in": 3600,
-                    "scope": "gist",
                 }
             ),
-            self.response({"id": 42, "login": "movie-fan"}),
+            self.response(
+                {
+                    "sub": "google-user-id",
+                    "email": "movie-fan@example.com",
+                    "email_verified": True,
+                    "name": "Movie Fan",
+                }
+            ),
         ]
 
-        session = self.store.exchange_github_oauth_code(
+        session = self.store.exchange_google_oauth_code(
             "one-time-code",
-            "one-time-state",
             "https://cinematch.example",
         )
 
-        self.assertEqual(session["user_id"], "42")
-        self.assertEqual(session["login"], "movie-fan")
+        self.assertEqual(session["user_id"], "google-user-id")
+        self.assertEqual(session["login"], "movie-fan@example.com")
+        self.assertEqual(session["name"], "Movie Fan")
         self.assertEqual(session["access_token"], "access")
         self.assertEqual(session["refresh_token"], "refresh")
-        exchange_call, profile_call = request.call_args_list
+        token_call, profile_call = request.call_args_list
+        self.assertEqual(token_call.args[:2], ("POST", self.store.TOKEN_URL))
         self.assertEqual(
-            exchange_call.args[:2],
-            (
-                "POST",
-                "https://github.com/login/oauth/access_token",
-            ),
-        )
-        self.assertEqual(
-            exchange_call.kwargs["data"],
+            token_call.kwargs["data"],
             {
                 "client_id": "client-id",
                 "client_secret": "client-secret",
                 "code": "one-time-code",
                 "redirect_uri": "https://cinematch.example",
-                "state": "one-time-state",
+                "grant_type": "authorization_code",
             },
         )
         self.assertEqual(
-            exchange_call.kwargs["headers"]["Content-Type"],
-            "application/x-www-form-urlencoded",
+            profile_call.args[:2],
+            ("GET", self.store.USERINFO_URL),
         )
-        self.assertEqual(
-            exchange_call.kwargs["headers"]["Accept"],
-            "application/json",
-        )
-        self.assertEqual(profile_call.args[:2], ("GET", "https://api.github.com/user"))
         self.assertEqual(
             profile_call.kwargs["headers"]["Authorization"],
             "Bearer access",
         )
 
     @patch("src.account_store.requests.request")
-    def test_code_exchange_rejects_token_without_gist_scope(self, request):
-        request.return_value = self.response({"access_token": "access", "scope": ""})
+    def test_code_exchange_rejects_unverified_google_email(self, request):
+        request.side_effect = [
+            self.response({"access_token": "access"}),
+            self.response(
+                {
+                    "sub": "google-user-id",
+                    "email": "movie-fan@example.com",
+                    "email_verified": False,
+                }
+            ),
+        ]
 
-        with self.assertRaisesRegex(AccountStoreError, "Gist permission"):
-            self.store.exchange_github_oauth_code(
+        with self.assertRaisesRegex(AccountStoreError, "verified email"):
+            self.store.exchange_google_oauth_code(
                 "one-time-code",
-                "one-time-state",
                 "https://cinematch.example",
             )
 
-        request.assert_called_once()
-
     @patch("src.account_store.requests.request")
-    def test_expiring_github_session_can_be_refreshed(self, request):
+    def test_expiring_google_session_can_be_refreshed(self, request):
         request.return_value = self.response(
-            {
-                "access_token": "new-access",
-                "refresh_token": "new-refresh",
-                "expires_in": 3600,
-            }
+            {"access_token": "new-access", "expires_in": 3600}
         )
 
-        session = self.store.refresh_session(
-            {
-                **self.session,
-                "access_token": "old-access",
-                "refresh_token": "old-refresh",
-            }
-        )
+        session = self.store.refresh_session(self.session)
 
         self.assertEqual(session["access_token"], "new-access")
-        self.assertEqual(session["refresh_token"], "new-refresh")
-        self.assertEqual(session["login"], "movie-fan")
+        self.assertEqual(session["refresh_token"], "user-refresh-token")
+        self.assertEqual(session["login"], "movie-fan@example.com")
         self.assertEqual(
             request.call_args.kwargs["data"],
             {
                 "client_id": "client-id",
                 "client_secret": "client-secret",
                 "grant_type": "refresh_token",
-                "refresh_token": "old-refresh",
+                "refresh_token": "user-refresh-token",
             },
         )
 
     @patch("src.account_store.requests.request")
-    def test_watchlist_reads_matching_gist_with_user_token(self, request):
+    def test_watchlist_reads_file_from_private_drive_app_data(self, request):
         request.side_effect = [
             self.response(
-                [
-                    {
-                        "id": "gist-1",
-                        "description": self.store.GIST_DESCRIPTION,
-                        "files": {self.store.WATCHLIST_FILENAME: {}},
-                    }
-                ]
+                {"files": [{"id": "file-1", "name": self.store.WATCHLIST_FILENAME}]}
             ),
             self.response(
-                {
-                    "id": "gist-1",
-                    "files": {
-                        self.store.WATCHLIST_FILENAME: {
-                            "content": json.dumps(
-                                {"version": 1, "movies": [{"title": "A Movie"}]}
-                            )
-                        }
-                    },
-                }
+                {"version": 1, "movies": [{"title": "A Movie"}]}
             ),
         ]
 
-        result = self.store.get_watchlist(self.session)
+        movies = self.store.get_watchlist(self.session)
 
-        self.assertEqual(result, [{"title": "A Movie"}])
-        self.assertEqual(self.session["gist_id"], "gist-1")
-        list_call, gist_call = request.call_args_list
-        self.assertEqual(list_call.args[:2], ("GET", "https://api.github.com/gists"))
+        self.assertEqual(movies, [{"title": "A Movie"}])
+        self.assertEqual(self.session["drive_file_id"], "file-1")
+        list_call, file_call = request.call_args_list
         self.assertEqual(
-            list_call.kwargs["headers"]["Authorization"],
-            "Bearer user-access-token",
+            list_call.args[:2],
+            ("GET", f"{self.store.API_URL}/files"),
         )
-        self.assertEqual(gist_call.args[1], "https://api.github.com/gists/gist-1")
+        self.assertEqual(list_call.kwargs["params"]["spaces"], "appDataFolder")
+        self.assertIn("appDataFolder", list_call.kwargs["params"]["q"])
+        self.assertEqual(
+            file_call.args[1],
+            f"{self.store.API_URL}/files/file-1",
+        )
+        self.assertEqual(file_call.kwargs["params"], {"alt": "media"})
 
     @patch("src.account_store.requests.request")
-    def test_save_creates_unlisted_gist_with_watchlist_data(self, request):
+    def test_save_creates_private_drive_file_and_uploads_watchlist(self, request):
         request.side_effect = [
-            self.response([]),
-            self.response({"id": "gist-new"}, status_code=201),
+            self.response({"files": []}),
+            self.response({"id": "file-new"}),
+            self.response(None, status_code=204),
         ]
 
         self.store.save_movie(
@@ -235,80 +225,72 @@ class GitHubGistAccountStoreTests(unittest.TestCase):
             {"title": "A Movie", "year": 2026, "tmdb_id": 42},
         )
 
-        create_call = request.call_args_list[1]
-        self.assertEqual(create_call.args[:2], ("POST", "https://api.github.com/gists"))
+        create_call, upload_call = request.call_args_list[1:]
         self.assertEqual(
-            create_call.kwargs["headers"]["Authorization"],
-            "Bearer user-access-token",
+            create_call.args[:2],
+            ("POST", f"{self.store.API_URL}/files"),
         )
-        body = create_call.kwargs["json"]
-        self.assertFalse(body["public"])
-        self.assertEqual(body["description"], self.store.GIST_DESCRIPTION)
         self.assertEqual(
-            json.loads(body["files"][self.store.WATCHLIST_FILENAME]["content"]),
+            create_call.kwargs["json"],
+            {
+                "name": self.store.WATCHLIST_FILENAME,
+                "mimeType": "application/json",
+                "parents": ["appDataFolder"],
+            },
+        )
+        self.assertEqual(
+            upload_call.args[:2],
+            ("PATCH", f"{self.store.UPLOAD_URL}/files/file-new"),
+        )
+        self.assertEqual(upload_call.kwargs["params"], {"uploadType": "media"})
+        self.assertEqual(
+            json.loads(upload_call.kwargs["data"]),
             {
                 "version": 1,
                 "movies": [{"title": "A Movie", "year": 2026, "tmdb_id": 42}],
             },
         )
-        self.assertEqual(self.session["gist_id"], "gist-new")
+        self.assertEqual(self.session["drive_file_id"], "file-new")
 
     @patch("src.account_store.requests.request")
-    def test_remove_and_clear_update_existing_gist(self, request):
+    def test_remove_and_clear_update_existing_drive_file(self, request):
         movie = {"title": "A Movie", "tmdb_id": 42}
         request.side_effect = [
-            self.response(
-                {
-                    "files": {
-                        self.store.WATCHLIST_FILENAME: {
-                            "content": json.dumps({"version": 1, "movies": [movie]})
-                        }
-                    }
-                }
-            ),
-            self.response({}, status_code=200),
-            self.response(
-                {
-                    "files": {
-                        self.store.WATCHLIST_FILENAME: {
-                            "content": json.dumps({"version": 1, "movies": [movie]})
-                        }
-                    }
-                }
-            ),
-            self.response({}, status_code=200),
+            self.response({"version": 1, "movies": [movie]}),
+            self.response(None, status_code=204),
+            self.response({"version": 1, "movies": [movie]}),
+            self.response(None, status_code=204),
         ]
-        self.session["gist_id"] = "gist-1"
+        self.session["drive_file_id"] = "file-1"
 
         self.store.remove_movie(self.session, movie)
         self.store.clear_watchlist(self.session)
 
-        patch_calls = [call for call in request.call_args_list if call.args[0] == "PATCH"]
-        self.assertEqual(len(patch_calls), 2)
+        upload_calls = [
+            request_call
+            for request_call in request.call_args_list
+            if request_call.args[0] == "PATCH"
+        ]
+        self.assertEqual(len(upload_calls), 2)
         self.assertEqual(
-            json.loads(
-                patch_calls[0].kwargs["json"]["files"][
-                    self.store.WATCHLIST_FILENAME
-                ]["content"]
-            )["movies"],
+            json.loads(upload_calls[0].kwargs["data"])["movies"],
             [],
         )
         self.assertEqual(
-            json.loads(
-                patch_calls[1].kwargs["json"]["files"][
-                    self.store.WATCHLIST_FILENAME
-                ]["content"]
-            )["movies"],
+            json.loads(upload_calls[1].kwargs["data"])["movies"],
             [],
         )
 
     @patch("src.account_store.requests.request")
-    def test_github_errors_are_reported(self, request):
-        response = self.response({"message": "Bad credentials"}, status_code=401)
-        response.raise_for_status.side_effect = HTTPError("unauthorized")
+    def test_google_errors_are_reported(self, request):
+        response = self.response(
+            {"error": {"message": "Permission denied"}},
+            status_code=403,
+        )
+        response.raise_for_status.side_effect = HTTPError("forbidden")
         request.return_value = response
 
-        with self.assertRaisesRegex(AccountStoreError, "Bad credentials"):
+        with self.assertRaisesRegex(AccountStoreError, "Permission denied"):
             self.store.get_watchlist(self.session)
 
 
