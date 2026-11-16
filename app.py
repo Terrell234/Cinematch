@@ -1,0 +1,1182 @@
+"""CineMatch AI - Modern Cinema Recommendation Studio.
+Featuring cutting-edge streaming UI, vibrant neon aesthetics, widescreen backdrops,
+content-based ML, Cinema Blend alchemy, visual mood matching, and live TMDB sync.
+"""
+
+import os
+import random
+from datetime import date
+
+import requests
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.express as px
+from dotenv import load_dotenv
+
+# Load .env
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+load_dotenv(os.path.expanduser("~/.env"))
+
+from src.data_loader import load_movie_data, get_recommender, add_movie_to_dataset
+from src.tmdb_client import TMDBClient
+
+# Page configuration
+st.set_page_config(
+    page_title="CineMatch AI — Modern Cinema Studio",
+    page_icon="🎬",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Custom High-End Cinema CSS
+st.markdown("""
+<style>
+    /* Dark Cinema Core Theme */
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Cabinet+Grotesk:wght@800;900&display=swap');
+
+    .stApp {
+        background: radial-gradient(circle at 10% 10%, rgba(229, 9, 20, 0.12) 0%, transparent 35%),
+                    radial-gradient(circle at 90% 15%, rgba(138, 43, 226, 0.16) 0%, transparent 40%),
+                    radial-gradient(circle at 50% 85%, rgba(0, 210, 255, 0.08) 0%, transparent 50%),
+                    #07090e;
+        color: #f8fafc;
+        font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    /* Main Cinema Marquee Header */
+    .marquee-hero {
+        position: relative;
+        background: linear-gradient(135deg, rgba(20, 24, 38, 0.85) 0%, rgba(35, 20, 36, 0.8) 100%);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 20px;
+        padding: 28px 32px;
+        margin-bottom: 24px;
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+        backdrop-filter: blur(20px);
+        overflow: hidden;
+    }
+
+    .marquee-title {
+        font-family: 'Cabinet Grotesk', sans-serif;
+        font-size: 2.8rem;
+        font-weight: 900;
+        letter-spacing: -1px;
+        background: linear-gradient(90deg, #ff1e42 0%, #ff7b00 35%, #ffd000 70%, #00f0ff 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 6px;
+        text-shadow: 0 4px 20px rgba(255, 30, 66, 0.3);
+    }
+
+    .marquee-sub {
+        font-size: 1.08rem;
+        color: #cbd5e1;
+        font-weight: 500;
+        line-height: 1.5;
+        max-width: 900px;
+    }
+
+    /* Cinema Billboard (Featured Movie Card) */
+    .billboard-container {
+        position: relative;
+        border-radius: 20px;
+        overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        margin-bottom: 28px;
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7);
+        background-size: cover;
+        background-position: center top;
+        min-height: 340px;
+    }
+
+    .billboard-overlay {
+        background: linear-gradient(90deg, rgba(7, 9, 14, 0.96) 0%, rgba(7, 9, 14, 0.82) 45%, rgba(7, 9, 14, 0.4) 100%);
+        padding: 32px 36px;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+    }
+
+    /* Vibrant Movie Cards */
+    .cinema-card {
+        background: rgba(18, 22, 34, 0.75);
+        border: 1px solid rgba(255, 255, 255, 0.09);
+        border-radius: 18px;
+        padding: 16px;
+        margin-bottom: 22px;
+        transition: all 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+        backdrop-filter: blur(14px);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+        display: flex;
+        flex-direction: column;
+        position: relative;
+    }
+
+    .cinema-card:hover {
+        transform: translateY(-6px) scale(1.015);
+        border-color: rgba(255, 30, 66, 0.7);
+        box-shadow: 0 20px 40px rgba(255, 30, 66, 0.25), 0 0 25px rgba(255, 30, 66, 0.15);
+    }
+
+    /* Floating Badges */
+    .match-pill {
+        display: inline-block;
+        background: linear-gradient(135deg, #ff0844 0%, #ff4e50 100%);
+        color: #ffffff;
+        font-weight: 800;
+        font-size: 0.8rem;
+        padding: 4px 12px;
+        border-radius: 30px;
+        box-shadow: 0 4px 12px rgba(255, 8, 68, 0.4);
+        margin-bottom: 10px;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }
+
+    .rating-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        background: rgba(255, 184, 0, 0.15);
+        color: #ffc107;
+        border: 1px solid rgba(255, 184, 0, 0.35);
+        font-weight: 800;
+        font-size: 0.84rem;
+        padding: 3px 10px;
+        border-radius: 8px;
+    }
+
+    .runtime-pill {
+        display: inline-block;
+        background: rgba(0, 210, 255, 0.12);
+        color: #38bdf8;
+        border: 1px solid rgba(0, 210, 255, 0.3);
+        font-size: 0.8rem;
+        font-weight: 600;
+        padding: 3px 9px;
+        border-radius: 8px;
+        margin-left: 6px;
+    }
+
+    .genre-chip {
+        display: inline-block;
+        background: rgba(255, 255, 255, 0.08);
+        color: #e2e8f0;
+        font-size: 0.74rem;
+        font-weight: 600;
+        padding: 3px 9px;
+        border-radius: 6px;
+        margin-right: 5px;
+        margin-bottom: 6px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        transition: all 0.2s;
+    }
+
+    .genre-chip:hover {
+        background: rgba(255, 255, 255, 0.18);
+        border-color: rgba(255, 255, 255, 0.3);
+    }
+
+    .explanation-badge {
+        background: linear-gradient(90deg, rgba(255, 30, 66, 0.15), rgba(138, 43, 226, 0.15));
+        border-left: 3px solid #ff1e42;
+        border-radius: 6px;
+        padding: 8px 12px;
+        font-size: 0.82rem;
+        color: #cbd5e1;
+        margin-top: 10px;
+        margin-bottom: 12px;
+        line-height: 1.45;
+    }
+
+    /* Poster Frame */
+    .poster-container {
+        position: relative;
+        border-radius: 12px;
+        overflow: hidden;
+        margin-bottom: 12px;
+        box-shadow: 0 8px 20px rgba(0,0,0,0.5);
+    }
+
+    /* Mood Button Cards */
+    .mood-card {
+        background: linear-gradient(135deg, rgba(25, 30, 48, 0.7), rgba(18, 22, 34, 0.9));
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 14px;
+        padding: 16px;
+        text-align: center;
+        transition: all 0.25s;
+    }
+
+    /* Metric Cards */
+    div[data-testid="stMetric"] {
+        background: rgba(20, 25, 38, 0.6);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 14px;
+        padding: 12px 18px;
+        backdrop-filter: blur(10px);
+    }
+
+    /* Tabs Styling */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        background: rgba(14, 18, 28, 0.7);
+        padding: 8px;
+        border-radius: 14px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        margin-bottom: 20px;
+    }
+
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 10px;
+        padding: 8px 18px;
+        font-weight: 600;
+        color: #94a3b8;
+    }
+
+    .stTabs [aria-selected="true"] {
+        background: linear-gradient(135deg, #e50914 0%, #b81d24 100%) !important;
+        color: white !important;
+        box-shadow: 0 4px 16px rgba(229, 9, 20, 0.4);
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Initialize Session State
+if "watchlist" not in st.session_state:
+    st.session_state["watchlist"] = []
+if "selected_movie_for_search" not in st.session_state:
+    st.session_state["selected_movie_for_search"] = "Inception"
+if "tmdb_api_key" not in st.session_state:
+    # Try Streamlit Secrets first (for cloud deployment), then fall back to .env / OS env
+    try:
+        secret_key = st.secrets.get("TMDB_API_KEY", "")
+    except Exception:
+        secret_key = ""
+    env_key = os.environ.get("TMDB_API_KEY", "").strip()
+    st.session_state["tmdb_api_key"] = secret_key or env_key
+
+# Load data and recommendation engine
+try:
+    df = load_movie_data()
+    recommender = get_recommender()
+except Exception as e:
+    st.error(f"Error loading movie dataset: {e}")
+    st.stop()
+
+# Initialize TMDB Client
+tmdb = TMDBClient(api_key_or_token=st.session_state.get("tmdb_api_key", ""))
+
+# -------------------------------------------------------------
+# SIDEBAR: CINEMA CONTROLS & FILTERS
+# -------------------------------------------------------------
+with st.sidebar:
+    st.markdown("## 🎬 **CINEMATCH**")
+    st.caption("AI-Powered Modern Cinema Studio")
+
+    # TMDB Live Status
+    if tmdb.is_configured:
+        st.success("🟢 **TMDB Live Connected**")
+    else:
+        st.warning("⚠️ **TMDB Offline**")
+
+    with st.expander("🔑 TMDB Key Configuration", expanded=False):
+        tmdb_key_input = st.text_input(
+            "API Key / Read Token",
+            value=st.session_state["tmdb_api_key"],
+            type="password",
+            help="Free API Key from themoviedb.org"
+        )
+        if tmdb_key_input != st.session_state["tmdb_api_key"]:
+            st.session_state["tmdb_api_key"] = tmdb_key_input.strip()
+            st.success("TMDB key set for this session. For persistent hosting, add it to Streamlit Secrets.")
+            st.rerun()
+
+    st.markdown("---")
+    st.markdown("### 🎛️ **Cinema Filters**")
+
+    # Reset Filters Button
+    if st.button("🔄 Reset All Filters", use_container_width=True):
+        st.session_state["min_rating"] = 7.0
+        st.session_state["genre_filter"] = []
+        st.session_state["max_runtime_opt"] = "Any Runtime"
+        st.rerun()
+
+    min_rating_filter = st.slider(
+        "⭐ Minimum Rating (IMDb / TMDB)",
+        min_value=5.0,
+        max_value=9.5,
+        value=st.session_state.get("min_rating", 7.0),
+        step=0.1,
+        key="min_rating"
+    )
+
+    min_year = int(df["year"].min())
+    max_year = max(int(df["year"].max()), date.today().year)
+    year_range_filter = st.slider(
+        "📅 Release Era",
+        min_value=min_year,
+        max_value=max_year,
+        value=(min_year, max_year)
+    )
+
+    max_runtime_option = st.selectbox(
+        "⏱️ Runtime Limit",
+        options=["Any Runtime", "Under 100 mins (Fast)", "Under 120 mins (Standard)", "Under 150 mins (Epic)"],
+        index=0,
+        key="max_runtime_opt"
+    )
+    max_runtime_val = None
+    if "100" in max_runtime_option:
+        max_runtime_val = 100
+    elif "120" in max_runtime_option:
+        max_runtime_val = 120
+    elif "150" in max_runtime_option:
+        max_runtime_val = 150
+
+    all_genres = recommender.get_all_genres()
+    genre_filters = st.multiselect(
+        "🎭 Filter by Genre",
+        options=all_genres,
+        default=st.session_state.get("genre_filter", []),
+        key="genre_filter"
+    )
+
+    st.markdown("---")
+    st.caption(f"🎞️ **{len(df)}** Masterpieces in Catalog")
+    st.caption(f"⭐ **{len(st.session_state['watchlist'])}** Saved in Watchlist")
+
+
+# -------------------------------------------------------------
+# HERO MARQUEE BANNER
+# -------------------------------------------------------------
+st.markdown("""
+<div class="marquee-hero">
+    <div class="marquee-title">CINEMATCH AI STUDIO 🎬</div>
+    <div class="marquee-sub">Experience next-generation cinema curation. Discover kinships across legendary film canons through <b>High-Dimensional Feature Vectors</b>, <b>Semantic DNA Blending</b>, and <b>Live TMDB Streaming Feeds</b>.</div>
+</div>
+""", unsafe_allow_html=True)
+
+# Vibrant Metrics Bar
+m_col1, m_col2, m_col3, m_col4, m_col5 = st.columns(5)
+m_col1.metric("🍿 Catalog", f"{len(df)} Films")
+m_col2.metric("⭐ Top Rated", f"{df.loc[df['rating'].idxmax()]['title']} ({df['rating'].max()})")
+m_col3.metric("🎭 Genres", f"{len(all_genres)} Types")
+m_col4.metric("⏱️ Avg Runtime", f"{int(df['runtime'].mean())} min")
+m_col5.metric("📌 My Watchlist", f"{len(st.session_state['watchlist'])}")
+
+# -------------------------------------------------------------
+# COMPONENT: VIBRANT MOVIE CARD
+# -------------------------------------------------------------
+def render_cinema_card(movie: dict, key_prefix: str = "card", show_match_button: bool = True):
+    m_id = movie.get("id", random.randint(1000, 9999))
+    title = movie.get("title", "Untitled")
+    year = movie.get("year", "N/A")
+    rating = movie.get("rating", 7.5)
+    runtime = movie.get("runtime", 120)
+    runtime_label = f"⏱️ {runtime}m" if runtime else "⏱️ Runtime N/A"
+    genres = movie.get("genres", "")
+    director = movie.get("director", "Unknown")
+    cast = movie.get("cast", "")
+    tagline = movie.get("tagline", "")
+    overview = movie.get("overview", "")
+    poster_url = movie.get("poster_url") or "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=600&auto=format&fit=crop&q=80"
+    trailer_url = movie.get("trailer_url") or f"https://www.youtube.com/results?search_query={title.replace(' ', '+')}+trailer"
+    match_pct = movie.get("match_percentage")
+    reasons = movie.get("match_reasons", [])
+
+    with st.container():
+        st.markdown('<div class="cinema-card">', unsafe_allow_html=True)
+
+        # Poster with rounded container
+        st.image(poster_url, use_container_width=True)
+
+        if match_pct:
+            st.markdown(f'<div class="match-pill">🎯 {match_pct}% MATCH</div>', unsafe_allow_html=True)
+
+        st.markdown(f"<h4 style='margin:4px 0 6px 0; font-weight:800; font-size:1.15rem; color:#ffffff;'>{title} <span style='font-size:0.85rem; color:#94a3b8; font-weight:500;'>({year})</span></h4>", unsafe_allow_html=True)
+
+        # Rating & Runtime Pills
+        st.markdown(f"""
+        <div style="margin-bottom:8px;">
+            <span class="rating-pill">⭐ {rating} / 10</span>
+            <span class="runtime-pill">{runtime_label}</span>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Genre chips
+        chips_html = "".join([f'<span class="genre-chip">{g.strip()}</span>' for g in str(genres).split(",")[:3]])
+        st.markdown(f"<div style='margin-bottom:6px;'>{chips_html}</div>", unsafe_allow_html=True)
+
+        st.caption(f"🎬 **Dir:** {director} • 👥 **Cast:** {cast.split(',')[0] if cast else 'Ensemble'}")
+
+        if tagline:
+            st.markdown(f"<div style='font-size:0.85rem; color:#f59e0b; font-style:italic; margin-top:2px;'>\"{tagline}\"</div>", unsafe_allow_html=True)
+
+        if reasons:
+            reasons_html = " • ".join(reasons[:2])
+            st.markdown(f'<div class="explanation-badge">💡 <b>DNA Match:</b> {reasons_html}</div>', unsafe_allow_html=True)
+
+        with st.expander("📖 Synopsis"):
+            st.write(overview)
+
+        with st.expander("▶️ Watch Trailer"):
+            if "youtube.com" in trailer_url or "youtu.be" in trailer_url:
+                st.video(trailer_url)
+            else:
+                st.link_button("Watch Trailer on YouTube", trailer_url, use_container_width=True)
+
+        # Action Buttons Row
+        b_col1, b_col2 = st.columns(2)
+        with b_col1:
+            is_saved = any(item["title"].lower() == title.lower() for item in st.session_state["watchlist"])
+            if is_saved:
+                if st.button("✅ Saved", key=f"unsave_{key_prefix}_{m_id}", use_container_width=True):
+                    st.session_state["watchlist"] = [item for item in st.session_state["watchlist"] if item["title"].lower() != title.lower()]
+                    st.toast(f"Removed '{title}' from Watchlist.")
+                    st.rerun()
+            else:
+                if st.button("⭐ Watchlist", key=f"save_{key_prefix}_{m_id}", use_container_width=True):
+                    st.session_state["watchlist"].append(movie)
+                    st.toast(f"Added '{title}' to Watchlist! ⭐")
+                    st.rerun()
+
+        with b_col2:
+            if show_match_button:
+                if st.button("🔍 Match This", key=f"match_seed_{key_prefix}_{m_id}", use_container_width=True, help="Set as focus movie"):
+                    st.session_state["selected_movie_for_search"] = title
+                    st.toast(f"Switched focus to '{title}'! 🎯")
+                    st.rerun()
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+
+# -------------------------------------------------------------
+# CATEGORY DEFINITIONS
+# -------------------------------------------------------------
+CATEGORIES = {
+    "🌸 Anime": {
+        "desc": "Legendary Japanese animation, Studio Ghibli wonders, cyberpunk epics, and heartfelt visual tales.",
+        "filter": lambda d: d[d["genres"].str.contains("Animation", na=False) | d["keywords"].str.contains("anime", case=False, na=False)],
+        "color": "linear-gradient(135deg, #ff758c 0%, #ff7eb3 100%)",
+        "tmdb_key": "anime"
+    },
+    "🔥 New Releases": {
+        "desc": "The newest theatrical blockbusters and contemporary cinema sensations (2022 to 2024+).",
+        "filter": lambda d: d[d["year"] >= 2022].sort_values(by="year", ascending=False),
+        "color": "linear-gradient(135deg, #ff416c 0%, #ff4b2b 100%)",
+        "tmdb_key": "new"
+    },
+    "🎭 Drama": {
+        "desc": "Compelling character studies, psychological thrillers, and award-winning emotional masterworks.",
+        "filter": lambda d: d[d["genres"].str.contains("Drama", na=False)].sort_values(by="rating", ascending=False),
+        "color": "linear-gradient(135deg, #8a2387 0%, #e94057 50%, #f27121 100%)",
+        "tmdb_key": "drama"
+    },
+    "💥 Action & Adventure": {
+        "desc": "Heart-pounding stunts, cosmic odysseys, mythical quests, and electrifying cinema spectacles.",
+        "filter": lambda d: d[d["genres"].str.contains("Action|Adventure", na=False)].sort_values(by="rating", ascending=False),
+        "color": "linear-gradient(135deg, #f12711 0%, #f5af19 100%)",
+        "tmdb_key": "action"
+    },
+    "🏛️ History Shows & Sagas": {
+        "desc": "True-to-life historic epochs, epic war chronicles, and critically acclaimed historical mini-series.",
+        "filter": lambda d: d[d["genres"].str.contains("History|War", na=False) | d["keywords"].str.contains("history|world war|chernobyl", case=False, na=False)].sort_values(by="rating", ascending=False),
+        "color": "linear-gradient(135deg, #134e5e 0%, #71b280 100%)",
+        "tmdb_key": "history"
+    },
+    "💖 Romance": {
+        "desc": "Timeless love stories, poetic encounters, bittersweet connections, and soulful journeys of the heart.",
+        "filter": lambda d: d[d["genres"].str.contains("Romance", na=False)].sort_values(by="rating", ascending=False),
+        "color": "linear-gradient(135deg, #ff9a9e 0%, #fecfef 100%)",
+        "tmdb_key": "romance"
+    },
+    "👑 Most Popular": {
+        "desc": "The highest-voted, widely celebrated, and universally acclaimed cinema masterpieces in history.",
+        "filter": lambda d: d.sort_values(by="votes", ascending=False),
+        "color": "linear-gradient(135deg, #f7971e 0%, #ffd200 100%)",
+        "tmdb_key": "popular"
+    }
+}
+
+# -------------------------------------------------------------
+# MAIN APP TABS
+# -------------------------------------------------------------
+tab_cats, tab_match, tab_blend, tab_mood, tab_roulette, tab_tmdb, tab_watchlist, tab_analytics = st.tabs([
+    "🎞️ Categories & Channels",
+    "🎯 Movie Matcher",
+    "🧪 Cinema Blend",
+    "🎭 Mood & Vibe",
+    "🎲 Movie Roulette",
+    "🌐 TMDB Live Discovery",
+    f"⭐ Watchlist ({len(st.session_state['watchlist'])})",
+    "📊 Cinema Analytics"
+])
+
+
+# =============================================================
+# TAB 0: CINEMA CATEGORIES & CHANNELS
+# =============================================================
+with tab_cats:
+    st.subheader("🎞️ Cinema Categories & Channels")
+    st.write("Browse dedicated collections crafted for anime lovers, recent theatrical releases, grand dramas, action sagas, historic epics, and romances.")
+
+    # Category Selector Pills
+    cat_keys = list(CATEGORIES.keys())
+    active_cat = st.session_state.get("active_category", cat_keys[0])
+
+    c_pills = st.columns(len(cat_keys))
+    for idx, c_name in enumerate(cat_keys):
+        with c_pills[idx]:
+            is_active = (c_name == active_cat)
+            btn_style = "primary" if is_active else "secondary"
+            if st.button(c_name, key=f"cat_pill_{idx}", type=btn_style, use_container_width=True):
+                st.session_state["active_category"] = c_name
+                st.rerun()
+
+    active_cat_data = CATEGORIES[active_cat]
+
+    # Glowing Category Banner
+    st.markdown(f"""
+    <div style="background: {active_cat_data['color']}; border-radius: 16px; padding: 20px 26px; margin: 18px 0; box-shadow: 0 8px 32px rgba(0,0,0,0.4); color: white;">
+        <h2 style="margin:0; font-family:'Cabinet Grotesk', sans-serif; font-size:2rem; font-weight:900; text-shadow: 0 2px 8px rgba(0,0,0,0.4);">{active_cat}</h2>
+        <div style="font-size:1.02rem; opacity:0.95; margin-top:4px; font-weight:500;">{active_cat_data['desc']}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Mode Selector: Curated vs Live TMDB
+    col_mode1, col_mode2 = st.columns([2, 1])
+    with col_mode1:
+        feed_mode = st.radio(
+            "Channel Source:",
+            options=["🎬 Curated HD Collection", "🌐 Live TMDB Streaming Feed"],
+            horizontal=True,
+            key=f"feed_mode_{active_cat}"
+        )
+
+    if feed_mode == "🎬 Curated HD Collection":
+        cat_df = active_cat_data["filter"](df)
+
+        # Apply global filters
+        if min_rating_filter > 0:
+            cat_df = cat_df[cat_df["rating"] >= min_rating_filter]
+        if max_runtime_val:
+            cat_df = cat_df[cat_df["runtime"] <= max_runtime_val]
+
+        st.caption(f"Showing **{len(cat_df)}** films in {active_cat}:")
+        if cat_df.empty:
+            st.warning("No films found with current rating/runtime filters. Try relaxing filters in the sidebar!")
+        else:
+            cols = st.columns(3)
+            for idx, (_, movie_row) in enumerate(cat_df.iterrows()):
+                with cols[idx % 3]:
+                    render_cinema_card(movie_row.to_dict(), key_prefix=f"cat_{idx}", show_match_button=True)
+    else:
+        # Live TMDB Stream
+        with st.spinner(f"Pulling live {active_cat} feed from TMDB..."):
+            tmdb_cat_results = tmdb.get_category_feed(active_cat_data["tmdb_key"])
+
+        if not tmdb_cat_results:
+            st.warning("Could not fetch live TMDB feed. Check your connection or explore the Curated HD Collection!")
+        else:
+            st.caption(f"Showing live feed (**{len(tmdb_cat_results)}** titles from TMDB):")
+            t_cols = st.columns(3)
+            for idx, item in enumerate(tmdb_cat_results[:15]):
+                with t_cols[idx % 3]:
+                    tmdb_id = item.get("id")
+                    title = item.get("title") or item.get("name") or "Unknown"
+                    rel_date = item.get("release_date", "2024")
+                    year = rel_date[:4] if rel_date else "2024"
+                    vote_avg = round(float(item.get("vote_average", 0.0)), 1)
+                    poster_p = item.get("poster_path")
+                    p_url = f"https://image.tmdb.org/t/p/w500{poster_p}" if poster_p else "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=600&auto=format&fit=crop&q=80"
+
+                    st.markdown('<div class="cinema-card">', unsafe_allow_html=True)
+                    st.image(p_url, use_container_width=True)
+                    st.markdown(f"#### {title} <span style='font-size:0.85rem; color:#94a3b8;'>({year})</span>", unsafe_allow_html=True)
+                    st.markdown(f"<span class='rating-pill'>⭐ {vote_avg} / 10</span>", unsafe_allow_html=True)
+                    st.caption(item.get("overview", "")[:120] + "...")
+
+                    already_in = title.lower() in [t.lower() for t in df["title"].tolist()]
+                    if already_in:
+                        st.info("✅ In Local Catalog")
+                    else:
+                        if st.button(f"📥 Import to CineMatch", key=f"import_cat_{tmdb_id}", use_container_width=True):
+                            with st.spinner(f"Pulling details for '{title}'..."):
+                                detailed = tmdb.get_movie_details(tmdb_id)
+                                formatted = tmdb.format_tmdb_movie(detailed or item)
+                                if detailed and detailed.get("backdrop_path"):
+                                    formatted["backdrop_url"] = f"https://image.tmdb.org/t/p/w1280{detailed['backdrop_path']}"
+                                added = add_movie_to_dataset(formatted)
+                                if added:
+                                    st.toast(f"Imported '{title}' to catalog! 🎬")
+                                    st.rerun()
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+
+# =============================================================
+# TAB 1: SIMILAR MOVIE MATCHER (Content-Based)
+# =============================================================
+with tab_match:
+    st.subheader("🎯 Content-Based Movie Matcher")
+    st.write("Select a seed film to discover kindred cinema based on semantic plot depth, director style, mood, and genre weights.")
+
+    all_titles = sorted(df["title"].tolist())
+
+    # Vibrant Visual Quick-Picks Carousel
+    st.markdown("#### ⚡ **Popular Movie Seeds (Click to inspect):**")
+    visual_seeds = [
+        ("Inception", "🌀 Inception"),
+        ("Interstellar", "🌌 Interstellar"),
+        ("The Dark Knight", "🦇 Dark Knight"),
+        ("Pulp Fiction", "🥩 Pulp Fiction"),
+        ("Parasite", "🍜 Parasite"),
+        ("Dune: Part One", "🏜️ Dune"),
+        ("Spirited Away", "🐉 Spirited Away"),
+        ("The Matrix", "🕶️ The Matrix")
+    ]
+
+    p_cols = st.columns(len(visual_seeds))
+    for idx, (f_title, label) in enumerate(visual_seeds):
+        with p_cols[idx]:
+            film_row = df[df["title"] == f_title]
+            if not film_row.empty:
+                poster = film_row.iloc[0].get("poster_url")
+                if poster:
+                    st.image(poster, use_container_width=True)
+            if st.button(label, key=f"v_seed_{idx}", use_container_width=True):
+                st.session_state["selected_movie_for_search"] = f_title
+                st.rerun()
+
+    # Seed Selector Dropdown
+    current_selected = st.session_state.get("selected_movie_for_search", "Inception")
+    default_idx = all_titles.index(current_selected) if current_selected in all_titles else 0
+
+    c_sel, c_num = st.columns([3, 1])
+    with c_sel:
+        selected_movie_title = st.selectbox(
+            "Search or Select Movie from Catalog:",
+            options=all_titles,
+            index=default_idx
+        )
+    with c_num:
+        top_n = st.slider("Recommendations Count:", min_value=3, max_value=12, value=6, step=3)
+
+    if selected_movie_title:
+        source_movie = recommender.get_movie_by_title(selected_movie_title)
+        backdrop = source_movie.get("backdrop_url") or source_movie.get("poster_url")
+
+        # WIDESCREEN CINEMA BILLBOARD
+        st.markdown(f"""
+        <div class="billboard-container" style="background-image: url('{backdrop}');">
+            <div class="billboard-overlay">
+                <span class="match-pill">FEATURED SEED FILM</span>
+                <h1 style="color:#ffffff; font-family:'Cabinet Grotesk', sans-serif; font-size:2.6rem; font-weight:900; margin:4px 0 10px 0;">{source_movie['title']} <span style="font-size:1.4rem; color:#94a3b8;">({source_movie['year']})</span></h1>
+                <div style="margin-bottom:12px;">
+                    <span class="rating-pill">⭐ {source_movie['rating']} / 10</span>
+                    <span class="runtime-pill">⏱️ {source_movie['runtime']} min</span>
+                    <span style="color:#e2e8f0; font-size:0.9rem; margin-left:10px;">🎬 <b>Director:</b> {source_movie['director']}</span>
+                </div>
+                <div style="font-size:1.05rem; color:#ffd000; font-style:italic; margin-bottom:10px;">"{source_movie.get('tagline', '')}"</div>
+                <p style="color:#cbd5e1; max-width:850px; font-size:0.98rem; line-height:1.6; margin-bottom:14px;">{source_movie['overview']}</p>
+                <div style="color:#94a3b8; font-size:0.88rem;">👥 <b>Cast:</b> {source_movie['cast']}</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        with st.expander("▶️ Watch Official Trailer for Selected Film"):
+            st.video(source_movie.get("trailer_url") or "")
+
+        st.markdown("---")
+        st.markdown(f"### 🍿 **Top Kinship Matches for *{selected_movie_title}***")
+
+        recs = recommender.recommend_similar(
+            title=selected_movie_title,
+            top_n=top_n,
+            genre_filter=genre_filters if genre_filters else None,
+            min_rating=min_rating_filter,
+            year_range=year_range_filter,
+            max_runtime=max_runtime_val
+        )
+
+        if not recs:
+            st.warning("No matches with current filters. Try relaxing filters in the sidebar!")
+        else:
+            cols = st.columns(3)
+            for idx, movie in enumerate(recs):
+                with cols[idx % 3]:
+                    render_cinema_card(movie, key_prefix=f"match_{idx}", show_match_button=True)
+
+
+# =============================================================
+# TAB 2: CINEMA BLEND (Multi-Movie Centroid)
+# =============================================================
+with tab_blend:
+    st.subheader("🧪 Cinema Blend Studio: Hybrid Movie Alchemy")
+    st.write("Synthesize a custom recommendation at the exact semantic centroid of two or three movies!")
+
+    st.markdown("#### ⚡ **1-Click Famous Cinema Fusions:**")
+    f1, f2, f3, f4 = st.columns(4)
+    with f1:
+        if st.button("🌌 Interstellar + 2001 Space", use_container_width=True):
+            st.session_state["blend_1"] = "Interstellar"
+            st.session_state["blend_2"] = "2001: A Space Odyssey"
+            st.rerun()
+    with f2:
+        if st.button("🤖 Matrix + Blade Runner 2049", use_container_width=True):
+            st.session_state["blend_1"] = "The Matrix"
+            st.session_state["blend_2"] = "Blade Runner 2049"
+            st.rerun()
+    with f3:
+        if st.button("🩸 Pulp Fiction + Fight Club", use_container_width=True):
+            st.session_state["blend_1"] = "Pulp Fiction"
+            st.session_state["blend_2"] = "Fight Club"
+            st.rerun()
+    with f4:
+        if st.button("🌸 Spirited Away + Amélie", use_container_width=True):
+            st.session_state["blend_1"] = "Spirited Away"
+            st.session_state["blend_2"] = "Amélie"
+            st.rerun()
+
+    st.markdown("---")
+    b_col1, b_col2 = st.columns(2)
+    with b_col1:
+        cur_b1 = st.session_state.get("blend_1", "Inception")
+        idx_b1 = all_titles.index(cur_b1) if cur_b1 in all_titles else 0
+        blend_movie_1 = st.selectbox("Film #1:", options=all_titles, index=idx_b1, key="sb_b1")
+        m1_data = recommender.get_movie_by_title(blend_movie_1)
+        if m1_data is not None and m1_data.get("poster_url"):
+            st.image(m1_data["poster_url"], width=200)
+
+    with b_col2:
+        cur_b2 = st.session_state.get("blend_2", "Blade Runner 2049")
+        idx_b2 = all_titles.index(cur_b2) if cur_b2 in all_titles else 1
+        blend_movie_2 = st.selectbox("Film #2:", options=all_titles, index=idx_b2, key="sb_b2")
+        m2_data = recommender.get_movie_by_title(blend_movie_2)
+        if m2_data is not None and m2_data.get("poster_url"):
+            st.image(m2_data["poster_url"], width=200)
+
+    include_third = st.checkbox("➕ Add a 3rd Film to the Blend?")
+    blend_titles = [blend_movie_1, blend_movie_2]
+    if include_third:
+        blend_movie_3 = st.selectbox("Film #3:", options=all_titles, index=2, key="sb_b3")
+        blend_titles.append(blend_movie_3)
+
+    if st.button("🧪 Synthesize Cinema Blend", type="primary", use_container_width=True):
+        with st.spinner("Calculating semantic centroid and blending cinematic DNA..."):
+            blend_recs = recommender.recommend_cinema_blend(
+                titles=blend_titles,
+                top_n=6,
+                genre_filter=genre_filters if genre_filters else None,
+                min_rating=min_rating_filter,
+                year_range=year_range_filter,
+                max_runtime=max_runtime_val
+            )
+
+            if not blend_recs:
+                st.warning("No blend candidates found with current filters. Try relaxing sidebar filters!")
+            else:
+                st.success(f"✨ Successfully Synthesized: **{' + '.join(blend_titles)}**!")
+                cols = st.columns(3)
+                for idx, movie in enumerate(blend_recs):
+                    with cols[idx % 3]:
+                        render_cinema_card(movie, key_prefix=f"blend_{idx}")
+
+
+# =============================================================
+# TAB 3: MOOD & VIBE MATCHER
+# =============================================================
+with tab_mood:
+    st.subheader("🎭 Emotional Vibe & Mood Matcher")
+    st.write("Tune CineMatch to your current headspace with vibrant emotion presets:")
+
+    # Vibrant Visual Mood Grid
+    vm1, vm2, vm3, vm4 = st.columns(4)
+    with vm1:
+        if st.button("🧠 Mind-Bending\n(Twisted & Cerebral)", use_container_width=True):
+            st.session_state["chosen_moods"] = ["Mind-Bending", "Psychological"]
+            st.rerun()
+    with vm2:
+        if st.button("💥 Adrenaline Rush\n(Action & High Stakes)", use_container_width=True):
+            st.session_state["chosen_moods"] = ["Adrenaline Rush", "Thrilling"]
+            st.rerun()
+    with vm3:
+        if st.button("😭 Tearjerker\n(Deeply Emotional)", use_container_width=True):
+            st.session_state["chosen_moods"] = ["Tearjerker", "Emotional"]
+            st.rerun()
+    with vm4:
+        if st.button("✨ Feel-Good & Cozy\n(Warm & Uplifting)", use_container_width=True):
+            st.session_state["chosen_moods"] = ["Feel-Good", "Whimsical"]
+            st.rerun()
+
+    vm5, vm6, vm7, vm8 = st.columns(4)
+    with vm5:
+        if st.button("😱 Spine-Chilling\n(Dread & Tension)", use_container_width=True):
+            st.session_state["chosen_moods"] = ["Spine-Chilling", "Terrifying"]
+            st.rerun()
+    with vm6:
+        if st.button("🎨 Visually Stunning\n(Epic Cinematography)", use_container_width=True):
+            st.session_state["chosen_moods"] = ["Visually Stunning", "Epic"]
+            st.rerun()
+    with vm7:
+        if st.button("🕵️ Intrigue & Mystery\n(Clever Whodunnit)", use_container_width=True):
+            st.session_state["chosen_moods"] = ["Witty", "Whodunnit"]
+            st.rerun()
+    with vm8:
+        if st.button("🏆 Masterpiece Classics\n(Cinema Royalty)", use_container_width=True):
+            st.session_state["chosen_moods"] = ["Masterpiece", "Iconic"]
+            st.rerun()
+
+    all_moods = recommender.get_all_moods()
+    default_moods = st.session_state.get("chosen_moods", ["Mind-Bending", "Visionary"])
+
+    selected_mood_tags = st.multiselect(
+        "Active Mood Tags:",
+        options=all_moods,
+        default=[m for m in default_moods if m in all_moods]
+    )
+
+    if selected_mood_tags:
+        vibe_recs = recommender.recommend_by_mood_and_vibes(
+            selected_moods=selected_mood_tags,
+            preferred_genres=genre_filters if genre_filters else None,
+            min_rating=min_rating_filter,
+            year_range=year_range_filter,
+            max_runtime=max_runtime_val,
+            top_n=6
+        )
+
+        st.markdown(f"#### 🌌 **Curated Films Matching: *{', '.join(selected_mood_tags)}***")
+        cols = st.columns(3)
+        for idx, movie in enumerate(vibe_recs):
+            with cols[idx % 3]:
+                render_cinema_card(movie, key_prefix=f"vibe_{idx}")
+
+
+# =============================================================
+# TAB 4: MOVIE ROULETTE / SURPRISE ME
+# =============================================================
+with tab_roulette:
+    st.subheader("🎲 Neon Movie Roulette")
+    st.write("Eliminate choice fatigue! Spin the cinema wheel to let algorithm fate pick tonight's film.")
+
+    rc1, rc2 = st.columns([3, 1])
+    with rc1:
+        roulette_genre = st.selectbox("Genre constraint:", options=["Any Genre"] + all_genres)
+    with rc2:
+        st.write("")
+        st.write("")
+        spin_btn = st.button("🎰 SPIN THE WHEEL!", type="primary", use_container_width=True)
+
+    if spin_btn:
+        candidates = df.copy()
+        if min_rating_filter > 0:
+            candidates = candidates[candidates["rating"] >= min_rating_filter]
+        if max_runtime_val:
+            candidates = candidates[candidates["runtime"] <= max_runtime_val]
+        if roulette_genre != "Any Genre":
+            candidates = candidates[candidates["genres"].str.contains(roulette_genre, na=False)]
+
+        if candidates.empty:
+            st.error("No movies found with those strict constraints! Try relaxing filters in the sidebar.")
+        else:
+            chosen = candidates.sample(1).iloc[0].to_dict()
+            st.balloons()
+            st.success(f"🎉 Destined for Tonight: **{chosen['title']}** ({chosen['year']})!")
+
+            bd_url = chosen.get("backdrop_url") or chosen.get("poster_url")
+            st.markdown(f"""
+            <div class="billboard-container" style="background-image: url('{bd_url}');">
+                <div class="billboard-overlay">
+                    <span class="match-pill">ROULETTE SELECTION</span>
+                    <h1 style="color:#ffffff; font-family:'Cabinet Grotesk', sans-serif; font-size:2.4rem; font-weight:900; margin:4px 0 10px 0;">{chosen['title']} <span style="font-size:1.3rem; color:#94a3b8;">({chosen['year']})</span></h1>
+                    <div style="margin-bottom:12px;">
+                        <span class="rating-pill">⭐ {chosen['rating']} / 10</span>
+                        <span class="runtime-pill">⏱️ {chosen['runtime']} min</span>
+                        <span style="color:#e2e8f0; font-size:0.9rem; margin-left:10px;">🎬 <b>Director:</b> {chosen['director']}</span>
+                    </div>
+                    <div style="font-size:1.05rem; color:#ffd000; font-style:italic; margin-bottom:8px;">"{chosen.get('tagline', '')}"</div>
+                    <p style="color:#cbd5e1; max-width:850px; font-size:0.98rem; line-height:1.5;">{chosen['overview']}</p>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            with st.expander("▶️ Watch Official Trailer Right Here", expanded=True):
+                st.video(chosen.get("trailer_url") or "")
+
+            b_save, b_spin = st.columns(2)
+            with b_save:
+                if st.button("⭐ Add to Watchlist", key="roulette_save_btn", use_container_width=True):
+                    st.session_state["watchlist"].append(chosen)
+                    st.toast("Saved to Watchlist! ⭐")
+                    st.rerun()
+            with b_spin:
+                if st.button("🔄 Spin Again", key="roulette_spin_again", use_container_width=True):
+                    st.rerun()
+
+
+# =============================================================
+# TAB 5: TMDB LIVE DISCOVERY & IMPORT
+# =============================================================
+with tab_tmdb:
+    st.subheader("🌐 TMDB Live Discovery & Global Importer")
+    st.write("Browse TMDB releases, find movies recommended from a favorite, or search the global catalog.")
+
+    tmdb_mode = st.radio(
+        "Choose Live TMDB Feed:",
+        options=[
+            "🔥 Trending This Week",
+            "🎬 Now Playing in Theaters",
+            "⭐ All-Time Top Rated",
+            "🎯 Recommendations for a Movie",
+            "🔍 Search TMDB Global Library",
+        ],
+        horizontal=True
+    )
+
+    if not tmdb.is_configured:
+        st.info("Add a TMDB API key in the sidebar to browse live movies and recommendations.")
+
+    tmdb_results = []
+    if tmdb_mode == "🎯 Recommendations for a Movie":
+        with st.form("tmdb_recommendation_search"):
+            recommendation_query = st.text_input(
+                "Find a movie to use as your starting point:",
+                placeholder="e.g. Inception, Dune, Parasite",
+            )
+            search_submitted = st.form_submit_button("Search TMDB")
+
+        if search_submitted:
+            if not recommendation_query.strip():
+                st.session_state["tmdb_recommendation_seeds"] = []
+            else:
+                st.session_state["tmdb_recommendation_seeds"] = []
+                try:
+                    with st.spinner("Searching TMDB..."):
+                        st.session_state["tmdb_recommendation_seeds"] = tmdb.search_movies(
+                            recommendation_query
+                        )
+                except requests.RequestException as error:
+                    st.error(f"TMDB movie search failed: {error}")
+
+        recommendation_seeds = st.session_state.get("tmdb_recommendation_seeds", [])
+        if recommendation_seeds:
+            seed_index = st.selectbox(
+                "Choose the movie you like:",
+                options=range(len(recommendation_seeds)),
+                format_func=lambda index: (
+                    f"{recommendation_seeds[index].get('title', 'Untitled')} "
+                    f"({(recommendation_seeds[index].get('release_date') or '????')[:4]})"
+                ),
+                key="tmdb_recommendation_seed",
+            )
+            seed_movie = recommendation_seeds[seed_index]
+            try:
+                with st.spinner("Finding movies recommended by TMDB..."):
+                    tmdb_results = tmdb.get_movie_recommendations(seed_movie["id"])
+            except requests.RequestException as error:
+                st.error(f"TMDB recommendations could not be loaded: {error}")
+            st.caption(f"Recommendations based on **{seed_movie.get('title', 'your movie')}**.")
+        elif search_submitted and recommendation_query.strip():
+            st.info("TMDB did not find a matching movie. Try another title.")
+    else:
+        try:
+            with st.spinner("Connecting to TMDB..."):
+                if tmdb_mode == "🔥 Trending This Week":
+                    tmdb_results = tmdb.get_trending_movies(time_window="week")
+                elif tmdb_mode == "🎬 Now Playing in Theaters":
+                    tmdb_results = tmdb.get_now_playing(page=1)
+                elif tmdb_mode == "⭐ All-Time Top Rated":
+                    tmdb_results = tmdb.get_top_rated(page=1)
+                elif tmdb_mode == "🔍 Search TMDB Global Library":
+                    search_query = st.text_input(
+                        "Enter Movie Name:",
+                        placeholder="e.g. Gladiator II, Challengers, Dune 2, Nosferatu...",
+                    )
+                    if search_query:
+                        tmdb_results = tmdb.search_movies(search_query)
+        except requests.RequestException as error:
+            st.error(f"TMDB request failed: {error}")
+
+    if tmdb_results:
+        selected_genre_ids = (
+            tmdb.genre_ids_for_names(genre_filters) if genre_filters else None
+        )
+        filtered_results = tmdb.filter_movie_results(
+            tmdb_results,
+            genre_ids=selected_genre_ids,
+            min_rating=min_rating_filter,
+            year_range=year_range_filter,
+        )
+        st.markdown(
+            f"Showing **{len(filtered_results)} of {len(tmdb_results)}** TMDB movies "
+            "after applying your rating, release-year, and genre filters."
+        )
+        if not filtered_results:
+            st.warning("No TMDB movies match the current filters. Try relaxing them in the sidebar.")
+
+        t_cols = st.columns(3)
+        for idx, item in enumerate(filtered_results[:12]):
+            with t_cols[idx % 3]:
+                tmdb_id = item.get("id")
+                title = item.get("title") or item.get("name") or "Unknown"
+                formatted_movie = tmdb.format_tmdb_movie(item)
+                formatted_movie["id"] = tmdb_id
+                render_cinema_card(
+                    formatted_movie,
+                    key_prefix=f"tmdb_{tmdb_id}_{idx}",
+                    show_match_button=False,
+                )
+
+                already_in = title.lower() in [t.lower() for t in df["title"].tolist()]
+                if already_in:
+                    st.info("✅ In Local Catalog")
+                else:
+                    if st.button(f"📥 Import to CineMatch", key=f"import_tmdb_{tmdb_id}", use_container_width=True):
+                        try:
+                            with st.spinner(f"Pulling full details for '{title}'..."):
+                                detailed = tmdb.get_movie_details(tmdb_id)
+                                formatted = tmdb.format_tmdb_movie(detailed or item)
+                                added = add_movie_to_dataset(formatted)
+                            if added:
+                                st.toast(f"Imported '{title}'! Recommender retrained.")
+                                st.rerun()
+                        except requests.RequestException as error:
+                            st.error(f"Could not import '{title}': {error}")
+
+
+# =============================================================
+# TAB 6: WATCHLIST & TASTE PROFILING
+# =============================================================
+with tab_watchlist:
+    st.subheader(f"⭐ My Cinema Watchlist ({len(st.session_state['watchlist'])} Films)")
+    st.write("Your personal collection of saved films. Generate personalized recommendations based on your collective taste profile.")
+
+    watchlist = st.session_state["watchlist"]
+
+    if not watchlist:
+        st.info("Your watchlist is empty! Click **⭐ Watchlist** on any movie card in the app to save it here.")
+    else:
+        w_bar1, w_bar2, w_bar3 = st.columns([2, 1, 1])
+        with w_bar1:
+            saved_titles = [m["title"] for m in watchlist if "title" in m]
+            if st.button("🧬 Synthesize Taste Profile Recommendations", type="primary", use_container_width=True):
+                with st.spinner("Analyzing your collective taste profile..."):
+                    profile_recs = recommender.recommend_for_watchlist(saved_titles, top_n=6)
+                    if profile_recs:
+                        st.markdown("### 🧬 Recommended Specifically for Your Taste Profile:")
+                        p_cols = st.columns(3)
+                        for idx, movie in enumerate(profile_recs):
+                            with p_cols[idx % 3]:
+                                render_cinema_card(movie, key_prefix=f"profile_{idx}")
+        with w_bar2:
+            watch_df = pd.DataFrame(watchlist)
+            csv_data = watch_df.to_csv(index=False).encode('utf-8')
+            st.download_button("📥 Export CSV", csv_data, "my_watchlist.csv", "text/csv", use_container_width=True)
+        with w_bar3:
+            if st.button("🗑️ Clear Watchlist", use_container_width=True):
+                st.session_state["watchlist"] = []
+                st.rerun()
+
+        st.markdown("---")
+        st.markdown("### 📋 Saved Films:")
+        w_cols = st.columns(3)
+        for idx, movie in enumerate(watchlist):
+            with w_cols[idx % 3]:
+                render_cinema_card(movie, key_prefix=f"watch_view_{idx}", show_match_button=True)
+
+
+# =============================================================
+# TAB 7: CINEMA ANALYTICS & VISUALIZATIONS
+# =============================================================
+with tab_analytics:
+    st.subheader("📊 Cinema Insights & Dataset Visualizations")
+    st.write("Explore distribution patterns across cinema history, directors, genres, and ratings.")
+
+    an_col1, an_col2 = st.columns(2)
+
+    with an_col1:
+        st.markdown("#### 📈 Distribution of IMDb Ratings")
+        fig_rating = px.histogram(
+            df,
+            x="rating",
+            nbins=15,
+            color_discrete_sequence=["#ff1e42"],
+            title="IMDb Ratings Distribution"
+        )
+        fig_rating.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="#121622",
+            plot_bgcolor="#121622",
+            xaxis_title="Rating (out of 10)",
+            yaxis_title="Count of Movies"
+        )
+        st.plotly_chart(fig_rating, use_container_width=True)
+
+    with an_col2:
+        st.markdown("#### ⏱️ Runtime vs. Rating Correlation")
+        fig_scatter = px.scatter(
+            df,
+            x="runtime",
+            y="rating",
+            hover_name="title",
+            color="rating",
+            color_continuous_scale="Plasma",
+            size="votes",
+            title="Movie Runtime vs. IMDb Rating"
+        )
+        fig_scatter.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="#121622",
+            plot_bgcolor="#121622",
+            xaxis_title="Runtime (Minutes)",
+            yaxis_title="Rating"
+        )
+        st.plotly_chart(fig_scatter, use_container_width=True)
+
+    an_col3, an_col4 = st.columns(2)
+
+    with an_col3:
+        st.markdown("#### 🎭 Top Genres Breakdown")
+        genre_counts = {}
+        for g_str in df["genres"].dropna():
+            for g in str(g_str).split(","):
+                g = g.strip()
+                genre_counts[g] = genre_counts.get(g, 0) + 1
+
+        genre_df = pd.DataFrame(list(genre_counts.items()), columns=["Genre", "Count"]).sort_values(by="Count", ascending=False).head(10)
+        fig_donut = px.pie(
+            genre_df,
+            names="Genre",
+            values="Count",
+            hole=0.45,
+            color_discrete_sequence=px.colors.sequential.Sunsetdark,
+            title="Top 10 Genres in Catalog"
+        )
+        fig_donut.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="#121622",
+            plot_bgcolor="#121622"
+        )
+        st.plotly_chart(fig_donut, use_container_width=True)
+
+    with an_col4:
+        st.markdown("#### 🎬 Top Directors in Catalog")
+        dir_counts = df["director"].value_counts().head(8).reset_index()
+        dir_counts.columns = ["Director", "Count"]
+        fig_dir = px.bar(
+            dir_counts,
+            x="Director",
+            y="Count",
+            color="Count",
+            color_continuous_scale="Inferno",
+            title="Top Directors by Film Count"
+        )
+        fig_dir.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="#121622",
+            plot_bgcolor="#121622"
+        )
+        st.plotly_chart(fig_dir, use_container_width=True)
