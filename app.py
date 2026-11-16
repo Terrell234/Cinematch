@@ -26,7 +26,7 @@ st.set_page_config(
     page_title="CineMatch AI — Modern Cinema Studio",
     page_icon="🎬",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 # Custom High-End Cinema CSS
@@ -39,7 +39,7 @@ st.markdown("""
         background: radial-gradient(circle at 10% 10%, rgba(229, 9, 20, 0.12) 0%, transparent 35%),
                     radial-gradient(circle at 90% 15%, rgba(138, 43, 226, 0.16) 0%, transparent 40%),
                     radial-gradient(circle at 50% 85%, rgba(0, 210, 255, 0.08) 0%, transparent 50%),
-                    #07090e;
+                    #030406;
         color: #f8fafc;
         font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
     }
@@ -47,8 +47,8 @@ st.markdown("""
     /* Main Cinema Marquee Header */
     .marquee-hero {
         position: relative;
-        background: linear-gradient(135deg, rgba(20, 24, 38, 0.85) 0%, rgba(35, 20, 36, 0.8) 100%);
-        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: linear-gradient(135deg, rgba(10, 12, 19, 0.96) 0%, rgba(14, 9, 17, 0.94) 100%);
+        border: 1px solid rgba(255, 255, 255, 0.08);
         border-radius: 20px;
         padding: 28px 32px;
         margin-bottom: 24px;
@@ -101,8 +101,8 @@ st.markdown("""
 
     /* Vibrant Movie Cards */
     .cinema-card {
-        background: rgba(18, 22, 34, 0.75);
-        border: 1px solid rgba(255, 255, 255, 0.09);
+        background: rgba(9, 11, 17, 0.92);
+        border: 1px solid rgba(255, 255, 255, 0.07);
         border-radius: 18px;
         padding: 16px;
         margin-bottom: 22px;
@@ -212,7 +212,7 @@ st.markdown("""
 
     /* Metric Cards */
     div[data-testid="stMetric"] {
-        background: rgba(20, 25, 38, 0.6);
+        background: rgba(8, 10, 15, 0.86);
         border: 1px solid rgba(255, 255, 255, 0.08);
         border-radius: 14px;
         padding: 12px 18px;
@@ -270,84 +270,13 @@ except Exception as e:
 tmdb = TMDBClient(api_key_or_token=st.session_state.get("tmdb_api_key", ""))
 
 # -------------------------------------------------------------
-# SIDEBAR: CINEMA CONTROLS & FILTERS
+# TOP-OF-PAGE MOVIE SEARCH
 # -------------------------------------------------------------
-with st.sidebar:
-    st.markdown("## 🎬 **CINEMATCH**")
-    st.caption("AI-Powered Modern Cinema Studio")
-
-    # TMDB Live Status
-    if tmdb.is_configured:
-        st.success("🟢 **TMDB Live Connected**")
-    else:
-        st.warning("⚠️ **TMDB Offline**")
-
-    with st.expander("🔑 TMDB Key Configuration", expanded=False):
-        tmdb_key_input = st.text_input(
-            "API Key / Read Token",
-            value=st.session_state["tmdb_api_key"],
-            type="password",
-            help="Free API Key from themoviedb.org"
-        )
-        if tmdb_key_input != st.session_state["tmdb_api_key"]:
-            st.session_state["tmdb_api_key"] = tmdb_key_input.strip()
-            st.success("TMDB key set for this session. For persistent hosting, add it to Streamlit Secrets.")
-            st.rerun()
-
-    st.markdown("---")
-    st.markdown("### 🎛️ **Cinema Filters**")
-
-    # Reset Filters Button
-    if st.button("🔄 Reset All Filters", use_container_width=True):
-        st.session_state["min_rating"] = 7.0
-        st.session_state["genre_filter"] = []
-        st.session_state["max_runtime_opt"] = "Any Runtime"
-        st.rerun()
-
-    min_rating_filter = st.slider(
-        "⭐ Minimum Rating (IMDb / TMDB)",
-        min_value=5.0,
-        max_value=9.5,
-        value=st.session_state.get("min_rating", 7.0),
-        step=0.1,
-        key="min_rating"
-    )
-
-    min_year = int(df["year"].min())
-    max_year = max(int(df["year"].max()), date.today().year)
-    year_range_filter = st.slider(
-        "📅 Release Era",
-        min_value=min_year,
-        max_value=max_year,
-        value=(min_year, max_year)
-    )
-
-    max_runtime_option = st.selectbox(
-        "⏱️ Runtime Limit",
-        options=["Any Runtime", "Under 100 mins (Fast)", "Under 120 mins (Standard)", "Under 150 mins (Epic)"],
-        index=0,
-        key="max_runtime_opt"
-    )
-    max_runtime_val = None
-    if "100" in max_runtime_option:
-        max_runtime_val = 100
-    elif "120" in max_runtime_option:
-        max_runtime_val = 120
-    elif "150" in max_runtime_option:
-        max_runtime_val = 150
-
-    all_genres = recommender.get_all_genres()
-    genre_filters = st.multiselect(
-        "🎭 Filter by Genre",
-        options=all_genres,
-        default=st.session_state.get("genre_filter", []),
-        key="genre_filter"
-    )
-
-    st.markdown("---")
-    st.caption(f"🎞️ **{len(df)}** Masterpieces in Catalog")
-    st.caption(f"⭐ **{len(st.session_state['watchlist'])}** Saved in Watchlist")
-
+search_query = st.text_input(
+    "🔎 Search the movie catalog",
+    placeholder="Search by title, genre, actor, director, mood, or story keyword...",
+    key="catalog_search",
+)
 
 # -------------------------------------------------------------
 # HERO MARQUEE BANNER
@@ -358,6 +287,82 @@ st.markdown("""
     <div class="marquee-sub">Experience next-generation cinema curation. Discover kinships across legendary film canons through <b>High-Dimensional Feature Vectors</b>, <b>Semantic DNA Blending</b>, and <b>Live TMDB Streaming Feeds</b>.</div>
 </div>
 """, unsafe_allow_html=True)
+
+# -------------------------------------------------------------
+# TOP SEARCH AND CINEMA FILTERS
+# -------------------------------------------------------------
+with st.expander("🎛️ Filters and TMDB settings", expanded=True):
+    filter_cols = st.columns([1.1, 1.5, 1, 1.8, 0.8])
+    with filter_cols[0]:
+        min_rating_filter = st.slider(
+            "⭐ Minimum Rating",
+            min_value=5.0,
+            max_value=9.5,
+            value=st.session_state.get("min_rating", 7.0),
+            step=0.1,
+            key="min_rating",
+        )
+
+    min_year = int(df["year"].min())
+    max_year = max(int(df["year"].max()), date.today().year)
+    with filter_cols[1]:
+        year_range_filter = st.slider(
+            "📅 Release Era",
+            min_value=min_year,
+            max_value=max_year,
+            value=(min_year, max_year),
+        )
+
+    with filter_cols[2]:
+        max_runtime_option = st.selectbox(
+            "⏱️ Runtime",
+            options=[
+                "Any Runtime",
+                "Under 100 mins",
+                "Under 120 mins",
+                "Under 150 mins",
+            ],
+            index=0,
+            key="max_runtime_opt",
+        )
+    max_runtime_val = None
+    if "100" in max_runtime_option:
+        max_runtime_val = 100
+    elif "120" in max_runtime_option:
+        max_runtime_val = 120
+    elif "150" in max_runtime_option:
+        max_runtime_val = 150
+
+    all_genres = recommender.get_all_genres()
+    with filter_cols[3]:
+        genre_filters = st.multiselect(
+            "🎭 Genre",
+            options=all_genres,
+            default=st.session_state.get("genre_filter", []),
+            key="genre_filter",
+        )
+
+    with filter_cols[4]:
+        st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
+        if st.button("Reset", use_container_width=True, help="Reset cinema filters"):
+            st.session_state["min_rating"] = 7.0
+            st.session_state["genre_filter"] = []
+            st.session_state["max_runtime_opt"] = "Any Runtime"
+            st.rerun()
+
+    tmdb_status = "🟢 TMDB connected" if tmdb.is_configured else "⚫ TMDB key not set"
+    st.caption(f"{tmdb_status} · {len(df)} movies in catalog · {len(st.session_state['watchlist'])} saved")
+
+with st.expander("🔑 Configure TMDB API key"):
+    tmdb_key_input = st.text_input(
+        "API Key / Read Token",
+        value=st.session_state["tmdb_api_key"],
+        type="password",
+        help="For a persistent Streamlit Cloud key, add TMDB_API_KEY under app Settings → Secrets.",
+    )
+    if tmdb_key_input != st.session_state["tmdb_api_key"]:
+        st.session_state["tmdb_api_key"] = tmdb_key_input.strip()
+        st.rerun()
 
 # Vibrant Metrics Bar
 m_col1, m_col2, m_col3, m_col4, m_col5 = st.columns(5)
@@ -500,6 +505,62 @@ CATEGORIES = {
         "tmdb_key": "popular"
     }
 }
+
+# -------------------------------------------------------------
+# GLOBAL CATALOG SEARCH
+# -------------------------------------------------------------
+if search_query.strip():
+    search_columns = [
+        column
+        for column in (
+            "title",
+            "genres",
+            "director",
+            "cast",
+            "moods",
+            "tagline",
+            "overview",
+            "keywords",
+        )
+        if column in df.columns
+    ]
+    searchable_movies = df[search_columns].fillna("").astype(str).agg(" ".join, axis=1)
+    search_results = df[
+        searchable_movies.str.contains(search_query.strip(), case=False, regex=False)
+    ].copy()
+    search_results = search_results[
+        (search_results["rating"] >= min_rating_filter)
+        & search_results["year"].between(*year_range_filter)
+    ]
+    if max_runtime_val:
+        search_results = search_results[search_results["runtime"] <= max_runtime_val]
+    if genre_filters:
+        selected_genres = set(genre_filters)
+        search_results = search_results[
+            search_results["genres"].apply(
+                lambda value: bool(
+                    selected_genres.intersection(
+                        genre.strip() for genre in str(value).split(",")
+                    )
+                )
+            )
+        ]
+    search_results = search_results.sort_values(
+        ["rating", "votes"], ascending=False
+    ).head(12)
+
+    st.markdown(f"### 🔎 Search results for “{search_query.strip()}”")
+    if search_results.empty:
+        st.info("No catalog movies match that keyword and the active filters.")
+    else:
+        st.caption(f"Showing {len(search_results)} matching catalog movies.")
+        search_cols = st.columns(3)
+        for index, (_, movie_row) in enumerate(search_results.iterrows()):
+            with search_cols[index % 3]:
+                render_cinema_card(
+                    movie_row.to_dict(),
+                    key_prefix=f"catalog_search_{index}",
+                )
 
 # -------------------------------------------------------------
 # MAIN APP TABS
