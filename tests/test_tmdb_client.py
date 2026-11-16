@@ -185,6 +185,18 @@ class TMDBClientTests(unittest.TestCase):
 
         self.assertEqual([movie["id"] for movie in results], [1])
 
+    def test_filter_movies_with_posters_removes_missing_and_blank_paths(self):
+        movies = [
+            {"id": 1, "poster_path": "/poster.jpg"},
+            {"id": 2, "poster_path": None},
+            {"id": 3, "poster_path": "  "},
+            {"id": 4},
+        ]
+
+        results = TMDBClient.filter_movies_with_posters(movies)
+
+        self.assertEqual([movie["id"] for movie in results], [1])
+
     def test_format_tmdb_movie_maps_discover_genres(self):
         client = TMDBClient()
 

@@ -218,6 +218,152 @@ class MovieRecommender:
             eligible.append(index)
         return eligible
 
+    def recommend_by_preferences(
+        self,
+        top_n: int = 6,
+        *,
+        seed_titles: list[str] | None = None,
+        genre_filter: list[str] | None = None,
+        min_rating: float = 0,
+        year_range: tuple[int, int] | None = None,
+        min_runtime: int | None = None,
+        max_runtime: int | None = None,
+        min_votes: int = 0,
+        preferred_moods: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return labeled alternatives when direct recommendations are unavailable."""
+        seeds = [title for title in (seed_titles or []) if title.casefold() in self._title_indices]
+        seed_indices = [self._title_indices[title.casefold()] for title in seeds]
+        seed_genres = {
+            genre
+            for index in seed_indices
+            for genre in self._split(self.movies.iloc[index]["genres"])
+        }
+        selected_genres = set(genre_filter or [])
+        preferred_genres = sorted(selected_genres or seed_genres)
+        tiers = [
+            (
+                {
+                    "genre_filter": preferred_genres or None,
+                    "min_rating": min_rating,
+                    "year_range": year_range,
+                    "min_runtime": min_runtime,
+                    "max_runtime": max_runtime,
+                    "min_votes": min_votes,
+                },
+                "No direct matches were found. These alternatives match your genre and rating preferences.",
+            ),
+            (
+                {
+                    "genre_filter": preferred_genres or None,
+                    "min_rating": min_rating,
+                    "year_range": None,
+                    "min_runtime": None,
+                    "max_runtime": None,
+                    "min_votes": 0,
+                },
+                "No direct matches were found. These alternatives match your genre and rating preferences; year, runtime, and vote limits were relaxed.",
+            ),
+            (
+                {
+                    "genre_filter": None,
+                    "min_rating": min_rating,
+                    "year_range": None,
+                    "min_runtime": None,
+                    "max_runtime": None,
+                    "min_votes": 0,
+                },
+                "No direct matches were found. These alternatives match your rating preference; genre, year, runtime, and vote limits were relaxed.",
+            ),
+            (
+                {
+                    "genre_filter": None,
+                    "min_rating": 0,
+                    "year_range": None,
+                    "min_runtime": None,
+                    "max_runtime": None,
+                    "min_votes": 0,
+                },
+                "No direct matches were found. Here are other highly rated alternatives; filters were relaxed.",
+            ),
+        ]
+
+        candidates: list[int] = []
+        fallback_note = tiers[-1][1]
+        selected_moods = {mood.casefold() for mood in (preferred_moods or [])}
+        for filters, note in tiers:
+            candidates = self._eligible(
+                excluded_titles=set(seed_titles or []),
+                **filters,
+            )
+            if candidates:
+                if selected_moods:
+                    mood_matches = [
+                        index
+                        for index in candidates
+                        if selected_moods.intersection(
+                            mood.casefold()
+                            for mood in self._split(self.movies.iloc[index]["moods"])
+                        )
+                    ]
+                    if mood_matches:
+                        candidates = mood_matches
+                    else:
+                        note += " Mood limits were relaxed."
+                fallback_note = note
+                break
+        if not candidates:
+            return []
+
+        seed_profile = (
+            np.asarray(self.matrix[seed_indices].mean(axis=0))
+            if seed_indices
+            else None
+        )
+        scores = []
+        for index in candidates:
+            row = self.movies.iloc[index]
+            rating_score = float(row["rating"]) / 10
+            genre_tags = self._split(row["genres"])
+            mood_tags = {mood.casefold() for mood in self._split(row["moods"])}
+            genre_score = (
+                len(genre_tags & set(preferred_genres)) / len(preferred_genres)
+                if preferred_genres
+                else 0
+            )
+            mood_score = (
+                len(mood_tags & selected_moods) / len(selected_moods)
+                if selected_moods
+                else 0
+            )
+            similarity_score = (
+                float(cosine_similarity(seed_profile, self.matrix[index]).ravel()[0])
+                if seed_profile is not None
+                else 0
+            )
+            score = (
+                similarity_score * 0.6
+                + genre_score * 0.2
+                + mood_score * 0.1
+                + rating_score * 0.1
+            )
+            scores.append((index, score))
+
+        scores.sort(
+            key=lambda item: (
+                item[1],
+                float(self.movies.iloc[item[0]]["rating"]),
+                int(self.movies.iloc[item[0]]["votes"]),
+            ),
+            reverse=True,
+        )
+        results = self._format_results(scores, top_n)
+        for result in results:
+            result["recommendation_type"] = "preference_fallback"
+            result["fallback_note"] = fallback_note
+            result["match_reasons"] = [fallback_note]
+        return results
+
     def _format_results(self, scores: list[tuple[int, float]], top_n: int) -> list[dict[str, Any]]:
         results = []
         for index, score in scores[:top_n]:
@@ -254,6 +400,17 @@ class MovieRecommender:
             key=lambda item: item[1],
             reverse=True,
         )
+        if not scores:
+            return self.recommend_by_preferences(
+                top_n=top_n,
+                seed_titles=[title],
+                genre_filter=genre_filter,
+                min_rating=min_rating,
+                year_range=year_range,
+                min_runtime=min_runtime,
+                max_runtime=max_runtime,
+                min_votes=min_votes,
+            )
         seed = self.movies.iloc[seed_index]
         results = self._format_results(scores, top_n)
         for result in results:
@@ -313,11 +470,21 @@ class MovieRecommender:
                 max_runtime=max_runtime,
                 min_votes=min_votes,
             )
-            return [
+            matching_results = [
                 movie
                 for movie in results
                 if movie["match_percentage"] >= min_relevance
             ]
+            return matching_results or self.recommend_by_preferences(
+                top_n=top_n,
+                seed_titles=[seed_title],
+                genre_filter=genre_filter,
+                min_rating=min_rating,
+                year_range=year_range,
+                min_runtime=min_runtime,
+                max_runtime=max_runtime,
+                min_votes=min_votes,
+            )
 
         available_genres = {genre.casefold(): genre for genre in self.get_all_genres()}
         prompt_genres = {
@@ -337,7 +504,15 @@ class MovieRecommender:
         expanded_query = " ".join([query, *expanded_terms])
         query_vector = self.vectorizer.transform([expanded_query])
         if not query_vector.nnz:
-            return []
+            return self.recommend_by_preferences(
+                top_n=top_n,
+                genre_filter=genre_filter,
+                min_rating=min_rating,
+                year_range=year_range,
+                min_runtime=min_runtime,
+                max_runtime=max_runtime,
+                min_votes=min_votes,
+            )
 
         eligible = self._eligible(
             genre_filter=genre_filter,
@@ -364,6 +539,16 @@ class MovieRecommender:
             for item in scores
             if item[1] > 0 and item[1] * 100 >= min_relevance
         ]
+        if not scores:
+            return self.recommend_by_preferences(
+                top_n=top_n,
+                genre_filter=genre_filter or sorted(prompt_genres),
+                min_rating=min_rating,
+                year_range=year_range,
+                min_runtime=min_runtime,
+                max_runtime=max_runtime,
+                min_votes=min_votes,
+            )
         scores.sort(
             key=lambda item: (
                 item[1],
@@ -404,7 +589,16 @@ class MovieRecommender:
     ) -> list[dict[str, Any]]:
         indices = [self._title_indices[t.casefold()] for t in titles if t.casefold() in self._title_indices]
         if not indices:
-            return []
+            return self.recommend_by_preferences(
+                top_n=top_n,
+                seed_titles=titles,
+                genre_filter=genre_filter,
+                min_rating=min_rating,
+                year_range=year_range,
+                min_runtime=min_runtime,
+                max_runtime=max_runtime,
+                min_votes=min_votes,
+            )
         centroid = np.asarray(self.matrix[indices].mean(axis=0))
         scores = []
         for index in self._eligible(
@@ -419,6 +613,17 @@ class MovieRecommender:
             score = float(cosine_similarity(centroid, self.matrix[index]).ravel()[0])
             scores.append((index, score))
         scores.sort(key=lambda item: item[1], reverse=True)
+        if not scores:
+            return self.recommend_by_preferences(
+                top_n=top_n,
+                seed_titles=titles,
+                genre_filter=genre_filter,
+                min_rating=min_rating,
+                year_range=year_range,
+                min_runtime=min_runtime,
+                max_runtime=max_runtime,
+                min_votes=min_votes,
+            )
         return self._format_results(scores, top_n)
 
     def recommend_by_mood_and_vibes(
@@ -447,6 +652,17 @@ class MovieRecommender:
             rating_boost = float(self.movies.iloc[index]["rating"]) / 10
             scores.append((index, overlap * 0.8 + rating_boost * 0.2))
         scores.sort(key=lambda item: item[1], reverse=True)
+        if not scores:
+            return self.recommend_by_preferences(
+                top_n=top_n,
+                genre_filter=preferred_genres,
+                min_rating=min_rating,
+                year_range=year_range,
+                min_runtime=min_runtime,
+                max_runtime=max_runtime,
+                min_votes=min_votes,
+                preferred_moods=selected_moods,
+            )
         return self._format_results(scores, top_n)
 
     def recommend_for_watchlist(
@@ -463,7 +679,16 @@ class MovieRecommender:
     ) -> list[dict[str, Any]]:
         indices = [self._title_indices[t.casefold()] for t in titles if t.casefold() in self._title_indices]
         if not indices:
-            return []
+            return self.recommend_by_preferences(
+                top_n=top_n,
+                seed_titles=titles,
+                genre_filter=genre_filter,
+                min_rating=min_rating,
+                year_range=year_range,
+                min_runtime=min_runtime,
+                max_runtime=max_runtime,
+                min_votes=min_votes,
+            )
         centroid = np.asarray(self.matrix[indices].mean(axis=0))
         scores = []
         for index in self._eligible(
@@ -477,4 +702,15 @@ class MovieRecommender:
         ):
             scores.append((index, float(cosine_similarity(centroid, self.matrix[index]).ravel()[0])))
         scores.sort(key=lambda item: item[1], reverse=True)
+        if not scores:
+            return self.recommend_by_preferences(
+                top_n=top_n,
+                seed_titles=titles,
+                genre_filter=genre_filter,
+                min_rating=min_rating,
+                year_range=year_range,
+                min_runtime=min_runtime,
+                max_runtime=max_runtime,
+                min_votes=min_votes,
+            )
         return self._format_results(scores, top_n)

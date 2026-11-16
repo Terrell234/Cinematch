@@ -376,6 +376,19 @@ def matches_any_genre(value: str, selected_genres: set[str]) -> bool:
     return bool(movie_genres.intersection(selected_genres))
 
 
+def show_preference_fallback_note(movies: list[dict]) -> None:
+    fallback_movie = next(
+        (
+            movie
+            for movie in movies
+            if movie.get("recommendation_type") == "preference_fallback"
+        ),
+        None,
+    )
+    if fallback_movie:
+        st.info(fallback_movie.get("fallback_note", "Here are alternatives based on your preferences."))
+
+
 def reset_cinema_filters() -> None:
     st.session_state["rating_preset"] = "7.0+"
     st.session_state["genre_filter"] = []
@@ -548,6 +561,8 @@ with st.expander("🎛️ Filters and TMDB settings", expanded=True):
             f"{tmdb_status} · {len(df)} movies in catalog · "
             f"{len(st.session_state['watchlist'])} saved"
         )
+        if not tmdb.is_configured:
+            st.caption("Catalog movies without a verified TMDB poster are hidden.")
     with status_cols[1]:
         if st.button("Test TMDB", key="test_tmdb_connection", use_container_width=True):
             if not tmdb.is_configured:
@@ -712,8 +727,22 @@ def resolve_catalog_movie_poster(movie: dict) -> dict:
     return resolved_movie
 
 
+def movie_with_verified_poster(movie: dict) -> dict | None:
+    if movie.get("poster_verified") and is_verified_tmdb_art(movie.get("poster_url", "")):
+        return dict(movie)
+    resolved_movie = resolve_catalog_movie_poster(movie)
+    if not is_verified_tmdb_art(resolved_movie.get("poster_url", "")):
+        return None
+    resolved_movie["poster_verified"] = True
+    return resolved_movie
+
+
 def render_movie_poster(movie: dict, width: int | None = None) -> None:
-    if movie.get("title") and movie.get("year") is not None:
+    if (
+        not movie.get("poster_verified")
+        and movie.get("title")
+        and movie.get("year") is not None
+    ):
         movie = resolve_catalog_movie_poster(movie)
     poster_url = str(movie.get("poster_url") or "").strip()
     if poster_url and is_verified_tmdb_art(poster_url):
@@ -745,6 +774,10 @@ def render_cinema_card(
     show_match_button: bool = True,
     show_full_details: bool = False,
 ):
+    movie = movie_with_verified_poster(movie)
+    if movie is None:
+        return False
+
     m_id = movie.get("id", random.randint(1000, 9999))
     title = movie.get("title", "Untitled")
     year = movie.get("year", "N/A")
@@ -795,7 +828,12 @@ def render_cinema_card(
 
         if reasons:
             reasons_html = " • ".join(reasons[:2])
-            st.markdown(f'<div class="explanation-badge">💡 <b>DNA Match:</b> {reasons_html}</div>', unsafe_allow_html=True)
+            reason_label = (
+                "Preference alternative"
+                if movie.get("recommendation_type") == "preference_fallback"
+                else "DNA Match"
+            )
+            st.markdown(f'<div class="explanation-badge">💡 <b>{reason_label}:</b> {reasons_html}</div>', unsafe_allow_html=True)
 
         with st.expander("📖 Synopsis"):
             st.write(overview)
@@ -943,13 +981,24 @@ if search_query.strip():
                 else:
                     details_cache[movie_id] = tmdb.format_tmdb_movie(details)
 
-    if search_results.empty:
-        st.info(
-            "No recommendations meet the prompt and active filters. "
-            "Lower the minimum relevance or try describing a genre, mood, story, "
-            "actor, director, or movie title."
+        search_results = pd.DataFrame(
+            movie
+            for movie in search_results.to_dict(orient="records")
+            if (
+                (matched := poster_cache.get((str(movie["title"]).casefold(), int(movie["year"]))))
+                and is_verified_tmdb_art(matched.get("poster_url", ""))
+            )
         )
     else:
+        search_results = search_results.iloc[0:0]
+
+    if search_results.empty:
+        st.info(
+            "No movie recommendations with verified TMDB posters match this prompt. "
+            "Connect TMDB, adjust your filters, or try a different description."
+        )
+    else:
+        show_preference_fallback_note(search_results.to_dict(orient="records"))
         st.caption(
             f"Top {len(search_results)} recommendations ranked by story, genre, "
             "cast, keywords, and other movie details."
@@ -1101,19 +1150,33 @@ with tab_cats:
             sort_column, ascending = catalog_sort_columns[category_sort]
             cat_df = cat_df.sort_values(sort_column, ascending=ascending)
 
-        st.caption(f"Showing **{len(cat_df)}** films in {active_cat} after applying your filters.")
-        if cat_df.empty:
-            st.warning("No films match these filters. Try widening the year or runtime range, lowering the rating/vote minimum, or removing a genre.")
+        category_movies = [
+            verified_movie
+            for movie in cat_df.to_dict(orient="records")
+            if (verified_movie := movie_with_verified_poster(movie)) is not None
+        ]
+        st.caption(
+            f"Showing **{len(category_movies)}** films in {active_cat} with verified posters."
+        )
+        if not category_movies:
+            if cat_df.empty:
+                st.warning("No films match these filters. Try widening the year or runtime range, lowering the rating/vote minimum, or removing a genre.")
+            elif not tmdb.is_configured:
+                st.info("Connect TMDB to verify posters and show movies in this collection.")
+            else:
+                st.info("No movies in this collection have a verified TMDB poster.")
         else:
             cols = st.columns(3)
-            for idx, (_, movie_row) in enumerate(cat_df.iterrows()):
+            for idx, movie in enumerate(category_movies):
                 with cols[idx % 3]:
-                    render_cinema_card(movie_row.to_dict(), key_prefix=f"cat_{idx}", show_match_button=True)
+                    render_cinema_card(movie, key_prefix=f"cat_{idx}", show_match_button=True)
     else:
         # Live TMDB Stream
         with st.spinner(f"Pulling live {active_cat} feed from TMDB..."):
             tmdb_cat_results = tmdb.get_category_feed(active_cat_data["tmdb_key"])
 
+        category_feed_count = len(tmdb_cat_results)
+        tmdb_cat_results = tmdb.filter_movies_with_posters(tmdb_cat_results)
         tmdb_cat_results = load_tmdb_runtimes(tmdb_cat_results)
         selected_genre_ids = (
             tmdb.genre_ids_for_names(genre_filters) if genre_filters else None
@@ -1145,14 +1208,16 @@ with tab_cats:
                 reverse=not ascending,
             )
 
-        if not tmdb_cat_results:
+        if not category_feed_count:
             st.warning("Could not fetch live TMDB feed. Check your connection or explore the Curated HD Collection!")
+        elif not tmdb_cat_results:
+            st.info("TMDB returned no movies with poster artwork for this collection.")
         elif not filtered_category_results:
             st.warning("No live titles match these filters. Try widening the year or runtime range, lowering the rating/vote minimum, or removing a genre.")
         else:
             st.caption(
-                f"Showing **{len(filtered_category_results)} of {len(tmdb_cat_results)}** "
-                "live TMDB titles after applying your filters."
+                f"Showing **{len(filtered_category_results)}** live TMDB titles "
+                "with posters that match your filters."
             )
             t_cols = st.columns(3)
             for idx, item in enumerate(filtered_category_results[:15]):
@@ -1166,7 +1231,7 @@ with tab_cats:
                     p_url = f"https://image.tmdb.org/t/p/w500{poster_p}" if poster_p else ""
 
                     st.markdown('<div class="cinema-card">', unsafe_allow_html=True)
-                    render_movie_poster({"poster_url": p_url})
+                    render_movie_poster({"poster_url": p_url, "poster_verified": True})
                     st.markdown(f"#### {title} <span style='font-size:0.85rem; color:#94a3b8;'>({year})</span>", unsafe_allow_html=True)
                     st.markdown(f"<span class='rating-pill'>⭐ {vote_avg} / 10</span>", unsafe_allow_html=True)
                     st.caption(item.get("overview", "")[:120] + "...")
@@ -1282,8 +1347,9 @@ with tab_match:
         )
 
         if not recs:
-            st.warning("No matches with current filters. Try relaxing filters in the sidebar!")
+            st.warning("No alternatives are available in the catalog. Try adjusting your filters.")
         else:
+            show_preference_fallback_note(recs)
             cols = st.columns(3)
             for idx, movie in enumerate(recs):
                 with cols[idx % 3]:
@@ -1358,9 +1424,11 @@ with tab_blend:
             )
 
             if not blend_recs:
-                st.warning("No blend candidates found with current filters. Try relaxing sidebar filters!")
+                st.warning("No blend alternatives are available in the catalog. Try adjusting your filters.")
             else:
-                st.success(f"✨ Successfully Synthesized: **{' + '.join(blend_titles)}**!")
+                show_preference_fallback_note(blend_recs)
+                if blend_recs[0].get("recommendation_type") != "preference_fallback":
+                    st.success(f"✨ Successfully Synthesized: **{' + '.join(blend_titles)}**!")
                 cols = st.columns(3)
                 for idx, movie in enumerate(blend_recs):
                     with cols[idx % 3]:
@@ -1433,6 +1501,7 @@ with tab_mood:
         )
 
         st.markdown(f"#### 🌌 **Curated Films Matching: *{', '.join(selected_mood_tags)}***")
+        show_preference_fallback_note(vibe_recs)
         cols = st.columns(3)
         for idx, movie in enumerate(vibe_recs):
             with cols[idx % 3]:
@@ -1475,39 +1544,50 @@ with tab_roulette:
         if candidates.empty:
             st.error("No movies found with those strict constraints! Try relaxing filters in the sidebar.")
         else:
-            chosen = candidates.sample(1).iloc[0].to_dict()
-            st.balloons()
-            st.success(f"🎉 Destined for Tonight: **{chosen['title']}** ({chosen['year']})!")
+            chosen = None
+            for _, candidate in candidates.sample(frac=1).iterrows():
+                chosen = movie_with_verified_poster(candidate.to_dict())
+                if chosen is not None:
+                    break
 
-            bd_candidate = chosen.get("backdrop_url") or chosen.get("poster_url")
-            bd_url = bd_candidate if is_verified_tmdb_art(bd_candidate) else ""
-            st.markdown(f"""
-            <div class="billboard-container" style="background-image: url('{bd_url}');">
-                <div class="billboard-overlay">
-                    <span class="match-pill">ROULETTE SELECTION</span>
-                    <h1 style="color:#ffffff; font-family:'Cabinet Grotesk', sans-serif; font-size:2.4rem; font-weight:900; margin:4px 0 10px 0;">{chosen['title']} <span style="font-size:1.3rem; color:#94a3b8;">({chosen['year']})</span></h1>
-                    <div style="margin-bottom:12px;">
-                        <span class="rating-pill">⭐ {chosen['rating']} / 10</span>
-                        <span class="runtime-pill">⏱️ {chosen['runtime']} min</span>
-                        <span style="color:#e2e8f0; font-size:0.9rem; margin-left:10px;">🎬 <b>Director:</b> {chosen['director']}</span>
+            if chosen is None:
+                st.warning(
+                    "No eligible movies have a verified poster. "
+                    "Check the TMDB connection or relax your filters."
+                )
+            else:
+                st.balloons()
+                st.success(f"🎉 Destined for Tonight: **{chosen['title']}** ({chosen['year']})!")
+
+                bd_candidate = chosen.get("backdrop_url") or chosen.get("poster_url")
+                bd_url = bd_candidate if is_verified_tmdb_art(bd_candidate) else ""
+                st.markdown(f"""
+                <div class="billboard-container" style="background-image: url('{bd_url}');">
+                    <div class="billboard-overlay">
+                        <span class="match-pill">ROULETTE SELECTION</span>
+                        <h1 style="color:#ffffff; font-family:'Cabinet Grotesk', sans-serif; font-size:2.4rem; font-weight:900; margin:4px 0 10px 0;">{chosen['title']} <span style="font-size:1.3rem; color:#94a3b8;">({chosen['year']})</span></h1>
+                        <div style="margin-bottom:12px;">
+                            <span class="rating-pill">⭐ {chosen['rating']} / 10</span>
+                            <span class="runtime-pill">⏱️ {chosen['runtime']} min</span>
+                            <span style="color:#e2e8f0; font-size:0.9rem; margin-left:10px;">🎬 <b>Director:</b> {chosen['director']}</span>
+                        </div>
+                        <div style="font-size:1.05rem; color:#ffd000; font-style:italic; margin-bottom:8px;">"{chosen.get('tagline', '')}"</div>
+                        <p style="color:#cbd5e1; max-width:850px; font-size:0.98rem; line-height:1.5;">{chosen['overview']}</p>
                     </div>
-                    <div style="font-size:1.05rem; color:#ffd000; font-style:italic; margin-bottom:8px;">"{chosen.get('tagline', '')}"</div>
-                    <p style="color:#cbd5e1; max-width:850px; font-size:0.98rem; line-height:1.5;">{chosen['overview']}</p>
                 </div>
-            </div>
-            """, unsafe_allow_html=True)
+                """, unsafe_allow_html=True)
 
-            render_movie_trailer(chosen, "roulette_selection")
+                render_movie_trailer(chosen, "roulette_selection")
 
-            b_save, b_spin = st.columns(2)
-            with b_save:
-                if st.button("⭐ Add to Watchlist", key="roulette_save_btn", use_container_width=True):
-                    st.session_state["watchlist"].append(chosen)
-                    st.toast("Saved to Watchlist! ⭐")
-                    st.rerun()
-            with b_spin:
-                if st.button("🔄 Spin Again", key="roulette_spin_again", use_container_width=True):
-                    st.rerun()
+                b_save, b_spin = st.columns(2)
+                with b_save:
+                    if st.button("⭐ Add to Watchlist", key="roulette_save_btn", use_container_width=True):
+                        st.session_state["watchlist"].append(chosen)
+                        st.toast("Saved to Watchlist! ⭐")
+                        st.rerun()
+                with b_spin:
+                    if st.button("🔄 Spin Again", key="roulette_spin_again", use_container_width=True):
+                        st.rerun()
 
 
 # =============================================================
@@ -1564,6 +1644,8 @@ with tab_tmdb:
                                 if not page_movies:
                                     break
                                 for item in page_movies:
+                                    if not item.get("poster_path"):
+                                        continue
                                     formatted = tmdb.format_tmdb_movie(item)
                                     title = formatted["title"].strip()
                                     if title.casefold() in known_titles:
@@ -1611,7 +1693,9 @@ with tab_tmdb:
                 except requests.RequestException as error:
                     show_tmdb_error("TMDB movie search", error)
 
-        recommendation_seeds = st.session_state.get("tmdb_recommendation_seeds", [])
+        recommendation_seeds = tmdb.filter_movies_with_posters(
+            st.session_state.get("tmdb_recommendation_seeds", [])
+        )
         if recommendation_seeds:
             seed_index = st.selectbox(
                 "Choose the movie you like:",
@@ -1651,6 +1735,7 @@ with tab_tmdb:
             show_tmdb_error("TMDB request", error)
 
     if tmdb_results:
+        tmdb_results = tmdb.filter_movies_with_posters(tmdb_results)
         tmdb_results = load_tmdb_runtimes(tmdb_results)
         selected_genre_ids = (
             tmdb.genre_ids_for_names(genre_filters) if genre_filters else None
@@ -1679,6 +1764,7 @@ with tab_tmdb:
                 title = item.get("title") or item.get("name") or "Unknown"
                 formatted_movie = tmdb.format_tmdb_movie(item)
                 formatted_movie["id"] = tmdb_id
+                formatted_movie["poster_verified"] = bool(formatted_movie["poster_url"])
                 render_cinema_card(
                     formatted_movie,
                     key_prefix=f"tmdb_{tmdb_id}_{idx}",
@@ -1694,6 +1780,7 @@ with tab_tmdb:
                             with st.spinner(f"Pulling full details for '{title}'..."):
                                 detailed = tmdb.get_movie_details(tmdb_id)
                                 formatted = tmdb.format_tmdb_movie(detailed or item)
+                                formatted["poster_verified"] = bool(formatted["poster_url"])
                                 added = add_movie_to_dataset(formatted)
                             if added:
                                 st.toast(f"Imported '{title}'! Recommender retrained.")
@@ -1706,13 +1793,22 @@ with tab_tmdb:
 # TAB 6: WATCHLIST & TASTE PROFILING
 # =============================================================
 with tab_watchlist:
-    st.subheader(f"⭐ My Cinema Watchlist ({len(st.session_state['watchlist'])} Films)")
+    saved_watchlist = st.session_state["watchlist"]
+    watchlist = [
+        visible_movie
+        for movie in saved_watchlist
+        if (visible_movie := movie_with_verified_poster(movie)) is not None
+    ]
+    st.subheader(f"⭐ My Cinema Watchlist ({len(watchlist)} Films with posters)")
     st.write("Your personal collection of saved films. Generate personalized recommendations based on your collective taste profile.")
 
-    watchlist = st.session_state["watchlist"]
-
-    if not watchlist:
+    if not saved_watchlist:
         st.info("Your watchlist is empty! Click **⭐ Watchlist** on any movie card in the app to save it here.")
+    elif not watchlist:
+        if not tmdb.is_configured:
+            st.info("Connect TMDB to verify posters for saved movies.")
+        else:
+            st.info("No saved movies currently have a verified poster.")
     else:
         w_bar1, w_bar2, w_bar3 = st.columns([2, 1, 1])
         with w_bar1:
@@ -1730,6 +1826,7 @@ with tab_watchlist:
                         min_votes=min_votes_filter,
                     )
                     if profile_recs:
+                        show_preference_fallback_note(profile_recs)
                         st.markdown("### 🧬 Recommended Specifically for Your Taste Profile:")
                         p_cols = st.columns(3)
                         for idx, movie in enumerate(profile_recs):

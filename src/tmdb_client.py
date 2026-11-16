@@ -121,6 +121,15 @@ class TMDBClient:
             filtered.append(movie)
         return filtered
 
+    @staticmethod
+    def filter_movies_with_posters(movies: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Keep TMDB results that include a poster image path."""
+        return [
+            movie
+            for movie in movies
+            if str(movie.get("poster_path") or "").strip()
+        ]
+
     def get_trending_movies(self, time_window: str = "week") -> list[dict[str, Any]]:
         return self._get(f"trending/movie/{time_window}").get("results", [])
 

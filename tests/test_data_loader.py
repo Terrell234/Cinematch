@@ -110,7 +110,13 @@ class AddMoviesToDatasetTests(unittest.TestCase):
             "emotional family exploring space",
             min_relevance=100,
         )
-        self.assertEqual(strict_results, [])
+        self.assertTrue(strict_results)
+        self.assertTrue(
+            all(
+                movie["recommendation_type"] == "preference_fallback"
+                for movie in strict_results
+            )
+        )
 
     def test_prompt_genres_filter_out_unrelated_movies(self):
         movies = pd.DataFrame(
@@ -255,6 +261,72 @@ class AddMoviesToDatasetTests(unittest.TestCase):
 
         self.assertTrue(results)
         self.assertNotEqual(results[0]["title"], "Inception")
+
+    def test_similar_movie_returns_preference_alternatives_when_filters_exclude_matches(self):
+        frame = pd.DataFrame(
+            [
+                {
+                    "title": "Inception",
+                    "year": 2010,
+                    "genres": "Sci-Fi, Action",
+                    "director": "A Director",
+                    "cast": "An Actor",
+                    "moods": "Mind-Bending",
+                    "tagline": "",
+                    "overview": "A thief enters dreams.",
+                    "keywords": "dreams, reality",
+                    "certification": "PG-13",
+                    "rating": 8.8,
+                    "votes": 2000,
+                    "runtime": 140,
+                },
+                {
+                    "title": "Dreams Beyond",
+                    "year": 2020,
+                    "genres": "Sci-Fi",
+                    "director": "Another Director",
+                    "cast": "Another Actor",
+                    "moods": "Mind-Bending",
+                    "tagline": "",
+                    "overview": "A family explores a dream world.",
+                    "keywords": "dreams, family, reality",
+                    "certification": "PG-13",
+                    "rating": 8.0,
+                    "votes": 800,
+                    "runtime": 120,
+                },
+                {
+                    "title": "City Comedy",
+                    "year": 2020,
+                    "genres": "Comedy",
+                    "director": "Third Director",
+                    "cast": "Third Actor",
+                    "moods": "Funny",
+                    "tagline": "",
+                    "overview": "Friends find themselves in a silly city adventure.",
+                    "keywords": "friendship, comedy",
+                    "certification": "PG",
+                    "rating": 8.5,
+                    "votes": 1000,
+                    "runtime": 100,
+                },
+            ]
+        )
+        recommender = data_loader.MovieRecommender(frame)
+
+        results = recommender.recommend_similar(
+            "Inception",
+            genre_filter=["Sci-Fi"],
+            min_rating=7.5,
+            year_range=(2025, 2025),
+            min_runtime=100,
+            max_runtime=140,
+            min_votes=500,
+        )
+
+        self.assertEqual([movie["title"] for movie in results], ["Dreams Beyond"])
+        self.assertEqual(results[0]["recommendation_type"], "preference_fallback")
+        self.assertIn("year, runtime, and vote limits were relaxed", results[0]["fallback_note"])
 
 
 if __name__ == "__main__":
