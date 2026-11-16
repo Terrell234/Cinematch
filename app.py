@@ -39,9 +39,9 @@ st.markdown("""
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Material+Symbols+Rounded');
 
     .stApp {
-        background: radial-gradient(ellipse at 50% -18%, rgba(229, 9, 20, 0.13), transparent 42%),
-                    #080808;
-        color: #f8fafc;
+        background: radial-gradient(ellipse at 50% -18%, rgba(180, 111, 63, 0.16), transparent 44%),
+                    #0f0d0b;
+        color: #f3eadc;
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     }
 
@@ -59,8 +59,8 @@ st.markdown("""
 
     .marquee-hero {
         position: relative;
-        background: linear-gradient(110deg, #171717 0%, #111111 58%, #160b0c 100%);
-        border: 1px solid #252525;
+        background: linear-gradient(110deg, #211b16 0%, #191511 58%, #241710 100%);
+        border: 1px solid #3b2b20;
         border-radius: 12px;
         padding: 26px 30px;
         margin-bottom: 24px;
@@ -73,7 +73,7 @@ st.markdown("""
         align-items: center;
         gap: 10px;
         margin-bottom: 8px;
-        color: #e50914;
+        color: #c47a50;
     }
 
     .brand-lockup .material-symbols-rounded {
@@ -84,16 +84,16 @@ st.markdown("""
         font-size: 1.55rem;
         font-weight: 800;
         letter-spacing: 0.11em;
-        color: #f5f5f1;
+        color: #f3eadc;
     }
 
     .marquee-title span {
-        color: #e50914;
+        color: #d39262;
     }
 
     .marquee-sub {
         font-size: 0.96rem;
-        color: #b3b3b3;
+        color: #c2b3a2;
         font-weight: 500;
         line-height: 1.5;
         max-width: 900px;
@@ -103,7 +103,7 @@ st.markdown("""
         position: relative;
         border-radius: 12px;
         overflow: hidden;
-        border: 1px solid #303030;
+        border: 1px solid #46372b;
         margin-bottom: 28px;
         box-shadow: 0 20px 50px rgba(0, 0, 0, 0.65);
         background-size: cover;
@@ -112,7 +112,7 @@ st.markdown("""
     }
 
     .billboard-overlay {
-        background: linear-gradient(90deg, rgba(8, 8, 8, 0.97) 0%, rgba(8, 8, 8, 0.83) 55%, rgba(8, 8, 8, 0.35) 100%);
+        background: linear-gradient(90deg, rgba(15, 13, 11, 0.97) 0%, rgba(15, 13, 11, 0.84) 55%, rgba(15, 13, 11, 0.35) 100%);
         padding: 32px 36px;
         height: 100%;
         display: flex;
@@ -121,8 +121,8 @@ st.markdown("""
     }
 
     .cinema-card {
-        background: #141414;
-        border: 1px solid #282828;
+        background: #1d1915;
+        border: 1px solid #382c22;
         border-radius: 10px;
         padding: 14px;
         margin-bottom: 22px;
@@ -135,14 +135,14 @@ st.markdown("""
 
     .cinema-card:hover {
         transform: translateY(-3px);
-        border-color: rgba(229, 9, 20, 0.7);
-        box-shadow: 0 14px 32px rgba(0, 0, 0, 0.55);
+        border-color: rgba(196, 122, 80, 0.78);
+        box-shadow: 0 14px 32px rgba(0, 0, 0, 0.55), 0 0 20px rgba(196, 122, 80, 0.08);
     }
 
     .match-pill {
         display: inline-block;
-        background: #e50914;
-        color: #ffffff;
+        background: #b9613f;
+        color: #fff8f0;
         font-weight: 800;
         font-size: 0.8rem;
         padding: 4px 12px;
@@ -156,9 +156,9 @@ st.markdown("""
         display: inline-flex;
         align-items: center;
         gap: 4px;
-        background: #242424;
-        color: #f2c94c;
-        border: 1px solid #3b3b3b;
+        background: #30261b;
+        color: #e5bf78;
+        border: 1px solid #55432c;
         font-weight: 800;
         font-size: 0.84rem;
         padding: 3px 10px;
@@ -167,9 +167,9 @@ st.markdown("""
 
     .runtime-pill {
         display: inline-block;
-        background: #202020;
-        color: #c8c8c8;
-        border: 1px solid #353535;
+        background: #28221b;
+        color: #c8b9a7;
+        border: 1px solid #40352a;
         font-size: 0.8rem;
         font-weight: 600;
         padding: 3px 9px;
@@ -179,30 +179,30 @@ st.markdown("""
 
     .genre-chip {
         display: inline-block;
-        background: #202020;
-        color: #d3d3d3;
+        background: #29231d;
+        color: #e1d5c6;
         font-size: 0.74rem;
         font-weight: 600;
         padding: 3px 9px;
         border-radius: 6px;
         margin-right: 5px;
         margin-bottom: 6px;
-        border: 1px solid #333333;
+        border: 1px solid #40352a;
         transition: all 0.2s;
     }
 
     .genre-chip:hover {
-        background: #2a2a2a;
-        border-color: #555555;
+        background: #393027;
+        border-color: #72553e;
     }
 
     .explanation-badge {
-        background: rgba(229, 9, 20, 0.08);
-        border-left: 3px solid #e50914;
+        background: rgba(196, 122, 80, 0.1);
+        border-left: 3px solid #c47a50;
         border-radius: 4px;
         padding: 8px 12px;
         font-size: 0.82rem;
-        color: #cbd5e1;
+        color: #d7c9b9;
         margin-top: 10px;
         margin-bottom: 12px;
         line-height: 1.45;
@@ -217,8 +217,8 @@ st.markdown("""
     }
 
     .mood-card {
-        background: #141414;
-        border: 1px solid #292929;
+        background: #1d1915;
+        border: 1px solid #382c22;
         border-radius: 10px;
         padding: 16px;
         text-align: center;
@@ -226,18 +226,18 @@ st.markdown("""
     }
 
     div[data-testid="stMetric"] {
-        background: #121212;
-        border: 1px solid #292929;
+        background: #191511;
+        border: 1px solid #382c22;
         border-radius: 10px;
         padding: 12px 18px;
     }
 
     .stTabs [data-baseweb="tab-list"] {
         gap: 4px;
-        background: #111111;
+        background: #191511;
         padding: 6px;
         border-radius: 8px;
-        border: 1px solid #262626;
+        border: 1px solid #382c22;
         margin-bottom: 20px;
     }
 
@@ -245,19 +245,19 @@ st.markdown("""
         border-radius: 6px;
         padding: 8px 14px;
         font-weight: 600;
-        color: #a3a3a3;
+        color: #bcae9e;
     }
 
     .stTabs [aria-selected="true"] {
-        background: #e50914 !important;
-        color: white !important;
+        background: #a95538 !important;
+        color: #fff8f0 !important;
     }
 
     div[data-testid="stTextInput"] input,
     div[data-testid="stSelectbox"] [data-baseweb="select"] > div,
     div[data-testid="stMultiSelect"] [data-baseweb="select"] > div {
-        background-color: #151515;
-        border-color: #353535;
+        background-color: #211b16;
+        border-color: #49382a;
         border-radius: 6px;
     }
 
@@ -268,13 +268,13 @@ st.markdown("""
     }
 
     .stButton > button[kind="primary"] {
-        background: #e50914;
-        border-color: #e50914;
+        background: #a95538;
+        border-color: #a95538;
     }
 
     .stButton > button[kind="primary"]:hover {
-        background: #b80710;
-        border-color: #b80710;
+        background: #87442f;
+        border-color: #87442f;
     }
 
     @media (max-width: 800px) {
@@ -325,7 +325,7 @@ search_query = st.text_input(
 st.markdown("""
 <div class="marquee-hero">
     <div class="brand-lockup"><span class="material-symbols-rounded">movie</span><div class="marquee-title">CINE<span>MATCH</span></div></div>
-    <div class="marquee-sub">Find your next favorite. Explore curated collections and personalized recommendations.</div>
+    <div class="marquee-sub">Settle in, find a favorite, and make movie night feel like home.</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -506,43 +506,43 @@ CATEGORIES = {
     "🌸 Anime": {
         "desc": "Legendary Japanese animation, Studio Ghibli wonders, cyberpunk epics, and heartfelt visual tales.",
         "filter": lambda d: d[d["genres"].str.contains("Animation", na=False) | d["keywords"].str.contains("anime", case=False, na=False)],
-        "color": "linear-gradient(135deg, #191919 0%, #250d0f 100%)",
+        "color": "linear-gradient(135deg, #30251d 0%, #1c1713 100%)",
         "tmdb_key": "anime"
     },
     "🔥 New Releases": {
         "desc": "The newest theatrical blockbusters and contemporary cinema sensations (2022 to 2024+).",
         "filter": lambda d: d[d["year"] >= 2022].sort_values(by="year", ascending=False),
-        "color": "linear-gradient(135deg, #191919 0%, #240c0e 100%)",
+        "color": "linear-gradient(135deg, #332319 0%, #1c1713 100%)",
         "tmdb_key": "new"
     },
     "🎭 Drama": {
         "desc": "Compelling character studies, psychological thrillers, and award-winning emotional masterworks.",
         "filter": lambda d: d[d["genres"].str.contains("Drama", na=False)].sort_values(by="rating", ascending=False),
-        "color": "linear-gradient(135deg, #191919 0%, #260f11 100%)",
+        "color": "linear-gradient(135deg, #30231c 0%, #1c1713 100%)",
         "tmdb_key": "drama"
     },
     "💥 Action & Adventure": {
         "desc": "Heart-pounding stunts, cosmic odysseys, mythical quests, and electrifying cinema spectacles.",
         "filter": lambda d: d[d["genres"].str.contains("Action|Adventure", na=False)].sort_values(by="rating", ascending=False),
-        "color": "linear-gradient(135deg, #191919 0%, #240c0e 100%)",
+        "color": "linear-gradient(135deg, #35251a 0%, #1c1713 100%)",
         "tmdb_key": "action"
     },
     "🏛️ History Shows & Sagas": {
         "desc": "True-to-life historic epochs, epic war chronicles, and critically acclaimed historical mini-series.",
         "filter": lambda d: d[d["genres"].str.contains("History|War", na=False) | d["keywords"].str.contains("history|world war|chernobyl", case=False, na=False)].sort_values(by="rating", ascending=False),
-        "color": "linear-gradient(135deg, #191919 0%, #211012 100%)",
+        "color": "linear-gradient(135deg, #2b261c 0%, #1c1713 100%)",
         "tmdb_key": "history"
     },
     "💖 Romance": {
         "desc": "Timeless love stories, poetic encounters, bittersweet connections, and soulful journeys of the heart.",
         "filter": lambda d: d[d["genres"].str.contains("Romance", na=False)].sort_values(by="rating", ascending=False),
-        "color": "linear-gradient(135deg, #191919 0%, #260f11 100%)",
+        "color": "linear-gradient(135deg, #38251e 0%, #1c1713 100%)",
         "tmdb_key": "romance"
     },
     "👑 Most Popular": {
         "desc": "The highest-voted, widely celebrated, and universally acclaimed cinema masterpieces in history.",
         "filter": lambda d: d.sort_values(by="votes", ascending=False),
-        "color": "linear-gradient(135deg, #191919 0%, #240c0e 100%)",
+        "color": "linear-gradient(135deg, #352718 0%, #1c1713 100%)",
         "tmdb_key": "popular"
     }
 }
@@ -1262,13 +1262,13 @@ with tab_analytics:
             df,
             x="rating",
             nbins=15,
-            color_discrete_sequence=["#e50914"],
+            color_discrete_sequence=["#b9613f"],
             title="IMDb Ratings Distribution"
         )
         fig_rating.update_layout(
             template="plotly_dark",
-            paper_bgcolor="#121212",
-            plot_bgcolor="#121212",
+            paper_bgcolor="#191511",
+            plot_bgcolor="#191511",
             xaxis_title="Rating (out of 10)",
             yaxis_title="Count of Movies"
         )
@@ -1282,14 +1282,14 @@ with tab_analytics:
             y="rating",
             hover_name="title",
             color="rating",
-            color_continuous_scale="Plasma",
+            color_continuous_scale=["#4b3022", "#b9613f", "#e5bf78"],
             size="votes",
             title="Movie Runtime vs. IMDb Rating"
         )
         fig_scatter.update_layout(
             template="plotly_dark",
-            paper_bgcolor="#121212",
-            plot_bgcolor="#121212",
+            paper_bgcolor="#191511",
+            plot_bgcolor="#191511",
             xaxis_title="Runtime (Minutes)",
             yaxis_title="Rating"
         )
@@ -1311,13 +1311,21 @@ with tab_analytics:
             names="Genre",
             values="Count",
             hole=0.45,
-            color_discrete_sequence=px.colors.sequential.Sunsetdark,
+            color_discrete_sequence=[
+                "#b9613f",
+                "#d39262",
+                "#e5bf78",
+                "#8b6044",
+                "#694833",
+                "#c8875b",
+                "#a77a52",
+            ],
             title="Top 10 Genres in Catalog"
         )
         fig_donut.update_layout(
             template="plotly_dark",
-            paper_bgcolor="#121212",
-            plot_bgcolor="#121212"
+            paper_bgcolor="#191511",
+            plot_bgcolor="#191511"
         )
         st.plotly_chart(fig_donut, use_container_width=True)
 
@@ -1330,12 +1338,12 @@ with tab_analytics:
             x="Director",
             y="Count",
             color="Count",
-            color_continuous_scale="Inferno",
+            color_continuous_scale=["#4b3022", "#b9613f", "#e5bf78"],
             title="Top Directors by Film Count"
         )
         fig_dir.update_layout(
             template="plotly_dark",
-            paper_bgcolor="#121212",
-            plot_bgcolor="#121212"
+            paper_bgcolor="#191511",
+            plot_bgcolor="#191511"
         )
         st.plotly_chart(fig_dir, use_container_width=True)
