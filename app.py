@@ -20,7 +20,6 @@ load_dotenv(os.path.expanduser("~/.env"))
 
 from src.data_loader import (
     add_movie_to_dataset,
-    add_movies_to_dataset,
     get_recommender,
     load_movie_data,
 )
@@ -1047,7 +1046,9 @@ with tab_tmdb:
                                         break
                                 if len(new_movies) >= import_count:
                                     break
-                            added_count = add_movies_to_dataset(new_movies)
+                            added_count = sum(
+                                add_movie_to_dataset(movie) for movie in new_movies
+                            )
                         if added_count:
                             st.success(
                                 f"Added {added_count} movies. The catalog now has "
