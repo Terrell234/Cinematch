@@ -57,7 +57,11 @@ class TMDBClient:
     }
 
     def __init__(self, api_key_or_token: str = ""):
-        self.credential = (api_key_or_token or os.getenv("TMDB_API_KEY", "")).strip()
+        self.credential = (
+            api_key_or_token
+            or os.getenv("TMDB_API_KEY", "")
+            or os.getenv("TMDB_API_TOKEN", "")
+        ).strip()
         self.is_configured = bool(self.credential)
         self.session = requests.Session()
         self.session.headers.update({"Accept": "application/json"})
@@ -141,10 +145,32 @@ class TMDBClient:
     def get_movie_recommendations(self, tmdb_id: int | str, page: int = 1) -> list[dict[str, Any]]:
         return self._get(f"movie/{tmdb_id}/recommendations", {"page": page}).get("results", [])
 
-    def search_movies(self, query: str) -> list[dict[str, Any]]:
+    def search_movies(self, query: str, year: int | None = None) -> list[dict[str, Any]]:
         if not query.strip():
             return []
-        return self._get("search/movie", {"query": query, "include_adult": "false"}).get("results", [])
+        params: dict[str, Any] = {"query": query, "include_adult": "false"}
+        if year is not None:
+            params["year"] = year
+        return self._get("search/movie", params).get("results", [])
+
+    def get_catalog_poster(self, title: str, year: int) -> dict[str, Any] | None:
+        """Find a poster for an exact catalog title/year, retrying broad search if needed."""
+        normalized_title = str(title or "").strip()
+        if not normalized_title or not self.is_configured:
+            return None
+
+        catalog_movie = [{"title": normalized_title, "year": int(year)}]
+        title_year = (normalized_title.casefold(), int(year))
+        year_results = self.search_movies(normalized_title, year=int(year))
+        matched, _ = self.match_catalog_search_posters(catalog_movie, year_results)
+        poster = matched.get(title_year)
+        if poster and poster.get("poster_url"):
+            return poster
+
+        all_results = self.search_movies(normalized_title)
+        matched, _ = self.match_catalog_search_posters(catalog_movie, all_results)
+        poster = matched.get(title_year)
+        return poster if poster and poster.get("poster_url") else None
 
     def match_catalog_search_posters(
         self,

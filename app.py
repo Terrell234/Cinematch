@@ -309,10 +309,17 @@ if "selected_movie_for_search" not in st.session_state:
     st.session_state["selected_movie_for_search"] = "Inception"
 
 try:
-    secret_key = str(st.secrets.get("TMDB_API_KEY", "") or "").strip()
+    secret_key = str(
+        st.secrets.get("TMDB_API_KEY", "")
+        or st.secrets.get("TMDB_API_TOKEN", "")
+        or ""
+    ).strip()
 except FileNotFoundError:
     secret_key = ""
-env_key = os.environ.get("TMDB_API_KEY", "").strip()
+env_key = (
+    os.environ.get("TMDB_API_KEY", "").strip()
+    or os.environ.get("TMDB_API_TOKEN", "").strip()
+)
 if secret_key or env_key:
     st.session_state["tmdb_api_key"] = secret_key or env_key
 elif "tmdb_api_key" not in st.session_state:
@@ -382,8 +389,8 @@ def reset_cinema_filters() -> None:
 # -------------------------------------------------------------
 if "catalog_search" not in st.session_state:
     st.session_state["catalog_search"] = ""
-if "catalog_tmdb_poster_cache" not in st.session_state:
-    st.session_state["catalog_tmdb_poster_cache"] = {}
+if "catalog_tmdb_poster_cache_v2" not in st.session_state:
+    st.session_state["catalog_tmdb_poster_cache_v2"] = {}
 if "catalog_tmdb_details_cache" not in st.session_state:
     st.session_state["catalog_tmdb_details_cache"] = {}
 if "tmdb_runtime_cache" not in st.session_state:
@@ -523,7 +530,7 @@ with st.expander("🔑 Configure TMDB API key"):
         "API Key / Read Token",
         value=st.session_state["tmdb_api_key"],
         type="password",
-        help="For a persistent Streamlit Cloud key, add TMDB_API_KEY under app Settings → Secrets.",
+        help="For a persistent Streamlit Cloud credential, add TMDB_API_KEY or TMDB_API_TOKEN under app Settings → Secrets.",
     )
     if tmdb_key_input != st.session_state["tmdb_api_key"]:
         st.session_state["tmdb_api_key"] = tmdb_key_input.strip()
@@ -560,19 +567,13 @@ def resolve_catalog_movie_poster(movie: dict) -> dict:
         return resolved_movie
 
     title_year = (title.casefold(), year)
-    poster_cache = st.session_state["catalog_tmdb_poster_cache"]
+    poster_cache = st.session_state["catalog_tmdb_poster_cache_v2"]
     if title_year not in poster_cache:
         try:
-            search_results = tmdb.search_movies(title)
+            poster_cache[title_year] = tmdb.get_catalog_poster(title, year)
         except requests.RequestException as error:
             poster_cache[title_year] = None
             show_tmdb_error(f"Could not verify the poster for {title}", error)
-        else:
-            matched_posters, _ = tmdb.match_catalog_search_posters(
-                [{"title": title, "year": year}],
-                search_results,
-            )
-            poster_cache[title_year] = matched_posters.get(title_year)
 
     matched_movie = poster_cache.get(title_year) or {}
     resolved_movie["poster_url"] = matched_movie.get("poster_url", "")
@@ -590,11 +591,16 @@ def render_movie_poster(movie: dict, width: int | None = None) -> None:
             st.image(poster_url, use_container_width=True)
         return
 
+    placeholder_text = (
+        "Connect TMDB to load verified posters"
+        if not tmdb.is_configured
+        else "No TMDB poster matched this title and year"
+    )
     st.markdown(
-        """
+        f"""
         <div class="poster-placeholder">
             <span class="material-symbols-rounded" style="font-size:2rem;">image_not_supported</span>
-            <span>Verified poster unavailable</span>
+            <span>{placeholder_text}</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -783,7 +789,7 @@ if search_query.strip():
         min_votes=min_votes_filter,
     )
     search_results = pd.DataFrame(recommendations)
-    poster_cache = st.session_state["catalog_tmdb_poster_cache"]
+    poster_cache = st.session_state["catalog_tmdb_poster_cache_v2"]
     details_cache = st.session_state["catalog_tmdb_details_cache"]
 
     if tmdb.is_configured:
@@ -791,15 +797,13 @@ if search_query.strip():
             title_year = (str(movie["title"]).casefold(), int(movie["year"]))
             if title_year not in poster_cache:
                 try:
-                    title_results = tmdb.search_movies(str(movie["title"]))
+                    poster_cache[title_year] = tmdb.get_catalog_poster(
+                        str(movie["title"]),
+                        int(movie["year"]),
+                    )
                 except requests.RequestException as error:
-                    show_tmdb_error(f"Could not load details for {movie['title']}", error)
-                    break
-                matched_movies, _ = tmdb.match_catalog_search_posters(
-                    [movie],
-                    title_results,
-                )
-                poster_cache[title_year] = matched_movies.get(title_year)
+                    poster_cache[title_year] = None
+                    show_tmdb_error(f"Could not load poster for {movie['title']}", error)
 
             tmdb_match = poster_cache.get(title_year)
             movie_id = tmdb_match.get("tmdb_id") if tmdb_match else None

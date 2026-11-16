@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from src.tmdb_client import TMDBClient
 
@@ -11,6 +11,70 @@ class TMDBClientTests(unittest.TestCase):
 
         self.assertTrue(client.is_configured)
         self.assertEqual(client.params, {"api_key": "env-test-key"})
+
+    def test_client_reads_tmdb_api_token_from_environment(self):
+        token = "eyJtest-access-token"
+        with patch.dict("os.environ", {"TMDB_API_KEY": "", "TMDB_API_TOKEN": token}):
+            client = TMDBClient()
+
+        self.assertTrue(client.is_configured)
+        self.assertEqual(client.session.headers["Authorization"], f"Bearer {token}")
+
+    def test_search_movies_can_scope_results_to_year(self):
+        client = TMDBClient("test-key")
+        response = Mock()
+        response.json.return_value = {"results": [{"id": 1, "title": "A Movie"}]}
+        response.raise_for_status.return_value = None
+        client.session.get = Mock(return_value=response)
+
+        results = client.search_movies("A Movie", year=2024)
+
+        self.assertEqual(results, [{"id": 1, "title": "A Movie"}])
+        client.session.get.assert_called_once_with(
+            "https://api.themoviedb.org/3/search/movie",
+            params={
+                "api_key": "test-key",
+                "query": "A Movie",
+                "include_adult": "false",
+                "year": 2024,
+            },
+            timeout=12,
+        )
+
+    def test_catalog_poster_retries_unscoped_search_for_exact_title_and_year(self):
+        client = TMDBClient("test-key")
+        with patch.object(
+            client,
+            "search_movies",
+            side_effect=[
+                [
+                    {
+                        "id": 1,
+                        "title": "A Movie",
+                        "release_date": "2023-01-01",
+                        "poster_path": "/wrong-year.jpg",
+                    }
+                ],
+                [
+                    {
+                        "id": 2,
+                        "title": "A Movie",
+                        "release_date": "2024-01-01",
+                        "poster_path": "/matching.jpg",
+                    }
+                ],
+            ],
+        ) as search_movies:
+            poster = client.get_catalog_poster("A Movie", 2024)
+
+        self.assertEqual(
+            poster["poster_url"],
+            "https://image.tmdb.org/t/p/w500/matching.jpg",
+        )
+        self.assertEqual(
+            search_movies.call_args_list,
+            [call("A Movie", year=2024), call("A Movie")],
+        )
 
     def test_movie_recommendations_use_tmdb_endpoint(self):
         client = TMDBClient("test-key")

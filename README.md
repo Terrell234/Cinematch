@@ -29,7 +29,7 @@ Open [http://localhost:8501](http://localhost:8501). The bundled CSV contains th
    TMDB_API_KEY = "your-tmdb-api-key"
    ```
 
-   The TMDB integration is optional; the curated catalog and recommendation features work without a key. You can also enter a key in the app's **Configure TMDB API key** panel for the current session.
+   `TMDB_API_TOKEN` is also accepted if you use a TMDB read access token. The TMDB integration is optional; the curated catalog and recommendation features work without a credential. You can also enter a key or token in the app's **Configure TMDB API key** panel for the current session.
    After deployment, open **Filters and TMDB settings** and select **Test TMDB** to verify the secret is accepted and live movie data can be loaded.
 
 For local development, copy `.env.example` to `.env` and set `TMDB_API_KEY` there. Keep API credentials out of GitHub: `.env` and Streamlit's `secrets.toml` are excluded by `.gitignore`.
