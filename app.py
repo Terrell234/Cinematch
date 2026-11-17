@@ -779,7 +779,7 @@ def resolve_catalog_movie_poster(movie: dict) -> dict:
 
     matched_movie = poster_cache.get(title_year) or {}
     resolved_movie["poster_url"] = matched_movie.get("poster_url", "")
-    for field in ("rating", "votes"):
+    for field in ("rating", "votes", "overview", "certification"):
         value = matched_movie.get(field)
         if value not in (None, ""):
             resolved_movie[field] = value
@@ -851,8 +851,9 @@ def render_cinema_card(
     genres = movie.get("genres", "")
     director = movie.get("director", "Unknown")
     cast = movie.get("cast", "")
+    certification = movie.get("certification") or "Not available"
     tagline = movie.get("tagline", "")
-    overview = movie.get("overview", "")
+    overview = movie.get("overview") or ""
     keywords = movie.get("keywords") or "Not available"
     box_office = movie.get("box_office") or "Not available"
     match_pct = movie.get("match_percentage")
@@ -898,8 +899,8 @@ def render_cinema_card(
             )
             st.markdown(f'<div class="explanation-badge">💡 <b>{reason_label}:</b> {reasons_html}</div>', unsafe_allow_html=True)
 
-        with st.expander("📖 Synopsis"):
-            st.write(overview)
+        with st.expander("📖 Full synopsis", expanded=True):
+            st.write(overview or "No synopsis is available.")
 
         if show_full_details:
             with st.expander("🎭 Full movie details"):
@@ -1308,7 +1309,7 @@ with tab_cats:
                     render_movie_poster({"poster_url": p_url, "poster_verified": True})
                     st.markdown(f"#### {title} <span style='font-size:0.85rem; color:#94a3b8;'>({year})</span>", unsafe_allow_html=True)
                     st.markdown(f"<span class='rating-pill'>⭐ {vote_avg} / 10</span>", unsafe_allow_html=True)
-                    st.caption(item.get("overview", "")[:120] + "...")
+                    st.write(item.get("overview") or "No synopsis is available.")
                     render_movie_trailer(
                         {
                             "title": title,

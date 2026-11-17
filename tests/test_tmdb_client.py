@@ -309,6 +309,7 @@ class TMDBClientTests(unittest.TestCase):
                     "poster_path": "/matching.jpg",
                     "vote_average": 8.3,
                     "vote_count": 1456,
+                    "overview": "Full TMDB synopsis.",
                 },
                 {
                     "id": 2,
@@ -326,6 +327,7 @@ class TMDBClientTests(unittest.TestCase):
         self.assertEqual(matched[("a movie", 2024)]["tmdb_id"], 1)
         self.assertEqual(matched[("a movie", 2024)]["rating"], 8.3)
         self.assertEqual(matched[("a movie", 2024)]["votes"], 1456)
+        self.assertEqual(matched[("a movie", 2024)]["overview"], "Full TMDB synopsis.")
         self.assertEqual([movie["id"] for movie in unmatched], [2])
 
     def test_format_tmdb_movie_includes_search_detail_fields(self):
