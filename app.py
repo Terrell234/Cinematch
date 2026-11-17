@@ -783,6 +783,8 @@ def resolve_catalog_movie_poster(movie: dict) -> dict:
         value = matched_movie.get(field)
         if value not in (None, ""):
             resolved_movie[field] = value
+    if matched_movie.get("rating") not in (None, ""):
+        resolved_movie["tmdb_rating"] = matched_movie["rating"]
     return resolved_movie
 
 
@@ -842,6 +844,8 @@ def render_cinema_card(
     year = movie.get("year", "N/A")
     rating = movie.get("vote_average")
     if rating is None:
+        rating = movie.get("tmdb_rating")
+    if rating is None:
         rating = movie.get("rating", "Not available")
     votes = movie.get("vote_count")
     if votes is None:
@@ -851,7 +855,7 @@ def render_cinema_card(
     genres = movie.get("genres", "")
     director = movie.get("director", "Unknown")
     cast = movie.get("cast", "")
-    certification = movie.get("certification") or "Not available"
+    certification = str(movie.get("certification") or "").strip()
     tagline = movie.get("tagline", "")
     overview = movie.get("overview") or ""
     keywords = movie.get("keywords") or "Not available"
@@ -907,7 +911,12 @@ def render_cinema_card(
 
         if show_full_details:
             with st.expander("🎭 Full movie details"):
-                st.write(f"**Certification:** {certification}")
+                st.write(
+                    f"**TMDB rating:** ⭐ {rating} / 10 · "
+                    f"{int(votes or 0):,} votes"
+                )
+                if certification:
+                    st.write(f"**Age certification:** {certification}")
                 st.write(f"**Director:** {director or 'Not available'}")
                 st.write(f"**Full cast:** {cast or 'Not available'}")
                 st.write(f"**Keywords:** {keywords}")
