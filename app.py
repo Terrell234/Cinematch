@@ -901,6 +901,9 @@ def render_cinema_card(
 
         with st.expander("📖 Full synopsis", expanded=True):
             st.write(overview or "No synopsis is available.")
+            st.caption(
+                f"⭐ TMDB rating: {rating} / 10 · {int(votes or 0):,} votes"
+            )
 
         if show_full_details:
             with st.expander("🎭 Full movie details"):
@@ -1310,6 +1313,10 @@ with tab_cats:
                     st.markdown(f"#### {title} <span style='font-size:0.85rem; color:#94a3b8;'>({year})</span>", unsafe_allow_html=True)
                     st.markdown(f"<span class='rating-pill'>⭐ {vote_avg} / 10</span>", unsafe_allow_html=True)
                     st.write(item.get("overview") or "No synopsis is available.")
+                    st.caption(
+                        f"⭐ TMDB rating: {vote_avg} / 10 · "
+                        f"{int(item.get('vote_count') or 0):,} votes"
+                    )
                     render_movie_trailer(
                         {
                             "title": title,
