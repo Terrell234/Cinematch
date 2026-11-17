@@ -779,6 +779,10 @@ def resolve_catalog_movie_poster(movie: dict) -> dict:
 
     matched_movie = poster_cache.get(title_year) or {}
     resolved_movie["poster_url"] = matched_movie.get("poster_url", "")
+    for field in ("rating", "votes"):
+        value = matched_movie.get(field)
+        if value not in (None, ""):
+            resolved_movie[field] = value
     return resolved_movie
 
 
@@ -836,13 +840,17 @@ def render_cinema_card(
     m_id = movie.get("id", random.randint(1000, 9999))
     title = movie.get("title", "Untitled")
     year = movie.get("year", "N/A")
-    rating = movie.get("rating", 7.5)
+    rating = movie.get("vote_average")
+    if rating is None:
+        rating = movie.get("rating", "Not available")
+    votes = movie.get("vote_count")
+    if votes is None:
+        votes = movie.get("votes", 0)
     runtime = movie.get("runtime", 120)
     runtime_label = f"⏱️ {runtime}m" if runtime else "⏱️ Runtime N/A"
     genres = movie.get("genres", "")
     director = movie.get("director", "Unknown")
     cast = movie.get("cast", "")
-    certification = movie.get("certification") or "Not available"
     tagline = movie.get("tagline", "")
     overview = movie.get("overview", "")
     keywords = movie.get("keywords") or "Not available"
@@ -863,7 +871,7 @@ def render_cinema_card(
         # Rating & Runtime Pills
         st.markdown(f"""
         <div style="margin-bottom:8px;">
-            <span class="rating-pill">⭐ {rating} / 10 · {int(movie.get("votes") or 0):,} votes</span>
+            <span class="rating-pill">⭐ {rating} / 10 · {int(votes or 0):,} votes</span>
             <span class="runtime-pill">{runtime_label}</span>
         </div>
         """, unsafe_allow_html=True)
@@ -875,7 +883,7 @@ def render_cinema_card(
         st.caption(
             f"🎬 **Dir:** {director} • 👥 **Cast:** "
             f"{cast.split(',')[0] if cast else 'Ensemble'} • "
-            f"🏷️ **Rating:** {certification}"
+            f"⭐ **Rating:** {rating} / 10"
         )
 
         if tagline:
