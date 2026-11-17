@@ -3,17 +3,13 @@ Featuring cutting-edge streaming UI, vibrant neon aesthetics, widescreen backdro
 content-based ML, Cinema Blend alchemy, visual mood matching, and live TMDB sync.
 """
 
-import json
 import os
 import random
-import secrets
-import time
 from datetime import date
 from urllib.parse import parse_qs, quote_plus, urlparse
 
 import requests
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -29,8 +25,8 @@ from src.data_loader import (
     get_recommender,
     load_movie_data,
 )
-from src.account_store import AccountStoreError, GoogleDriveAccountStore
 from src.tmdb_client import TMDBClient
+from src.watchlist import add_movie, movie_id, remove_movie
 
 # Page configuration
 st.set_page_config(
@@ -311,8 +307,6 @@ st.markdown("""
 # Initialize Session State
 if "watchlist" not in st.session_state:
     st.session_state["watchlist"] = []
-if "account_session" not in st.session_state:
-    st.session_state["account_session"] = None
 if "selected_movie_for_search" not in st.session_state:
     st.session_state["selected_movie_for_search"] = "Inception"
 try:
@@ -344,215 +338,30 @@ except Exception as e:
 tmdb = TMDBClient(api_key_or_token=st.session_state.get("tmdb_api_key", ""))
 
 
-def read_app_secret(name: str) -> str:
-    try:
-        value = st.secrets.get(name, "")
-    except FileNotFoundError:
-        value = ""
-    return str(value or os.environ.get(name, "")).strip()
-
-
-google_client_id = read_app_secret("GOOGLE_CLIENT_ID")
-google_client_secret = read_app_secret("GOOGLE_CLIENT_SECRET")
-google_redirect_url = read_app_secret("GOOGLE_REDIRECT_URL")
-account_config_error = None
-account_store = (
-    GoogleDriveAccountStore(google_client_id, google_client_secret)
-    if google_client_id and google_client_secret
-    else None
-)
-google_oauth_configured = bool(account_store and google_redirect_url)
-google_oauth_cookie = "cinematch_google_oauth_state"
-
-
-def prepare_google_oauth_request() -> None:
-    global account_config_error
-    if (
-        account_store is None
-        or not google_redirect_url
-        or st.session_state.get("account_session")
-    ):
-        return
-    oauth_request = st.session_state.get("google_oauth_request")
-    if not oauth_request or oauth_request.get("expires_at", 0) <= int(time.time()) + 60:
-        try:
-            state = secrets.token_urlsafe(32)
-            authorization_url = account_store.create_google_oauth_request(
-                google_redirect_url,
-                state,
-            )
-        except AccountStoreError as error:
-            account_config_error = str(error)
-        else:
-            st.session_state["google_oauth_request"] = {
-                "authorization_url": authorization_url,
-                "state": state,
-                "expires_at": int(time.time()) + 600,
-            }
-
-
-def clear_account_session() -> None:
-    st.session_state["account_session"] = None
-    st.session_state["watchlist"] = []
-    st.session_state["watchlist_user_id"] = None
-    st.session_state["watchlist_loaded"] = False
-
-
-def process_google_oauth_callback() -> None:
-    code = str(st.query_params.get("code") or "")
-    returned_state = str(st.query_params.get("state") or "")
-    oauth_error = str(
-        st.query_params.get("error")
-        or st.query_params.get("error_description")
-        or ""
-    )
-    if not (code or returned_state or oauth_error):
-        return
-
-    try:
-        if oauth_error:
-            raise AccountStoreError("Google sign-in was canceled or rejected.")
-        if account_store is None or not google_oauth_configured:
-            raise AccountStoreError("Google sign-in is not configured.")
-        oauth_request = st.session_state.get("google_oauth_request") or {}
-        expected_state = str(oauth_request.get("state") or "")
-        browser_state = str(st.context.cookies.get(google_oauth_cookie, ""))
-        account_store.validate_google_oauth_state(
-            returned_state,
-            expected_state,
-            browser_state,
-            int(oauth_request.get("expires_at") or 0),
-        )
-        session = account_store.exchange_google_oauth_code(
-            auth_code=code,
-            redirect_url=google_redirect_url,
-        )
-    except AccountStoreError as error:
-        st.session_state["account_message"] = f"Google sign-in failed: {error}"
-    else:
-        st.session_state["account_session"] = session
-        st.session_state["watchlist_loaded"] = False
-        st.session_state["account_message"] = "Signed in with Google."
-    finally:
-        st.session_state["google_oauth_request"] = None
-        st.query_params.clear()
-        cookie = (
-            f"{google_oauth_cookie}=; Path=/; Max-Age=0; SameSite=Lax"
-            + ("; Secure" if google_redirect_url.startswith("https://") else "")
-        )
-        components.html(
-            f"<script>window.parent.document.cookie = {json.dumps(cookie)};</script>",
-            height=0,
-        )
-
-
-def log_out_account() -> None:
-    clear_account_session()
-    st.session_state["google_oauth_request"] = None
-    st.rerun()
-
-
-def load_account_watchlist() -> tuple[dict | None, bool, str | None]:
-    session = st.session_state.get("account_session")
-    if not session:
-        st.session_state["watchlist"] = []
-        st.session_state["watchlist_loaded"] = False
-        st.session_state["watchlist_user_id"] = None
-        return None, False, None
-    if account_store is None:
-        clear_account_session()
-        return None, False, "Google account settings are missing."
-    if (
-        session.get("provider") != "google"
-        or not session.get("login")
-        or not session.get("user_id")
-    ):
-        clear_account_session()
-        return None, False, "Please sign in with Google again to access your watchlist."
-
-    expires_at = int(session.get("expires_at") or 0)
-    if expires_at and expires_at <= int(time.time()) + 60:
-        try:
-            session = account_store.refresh_session(session)
-        except AccountStoreError as error:
-            clear_account_session()
-            return None, False, f"Your account session expired. Please sign in again. {error}"
-        st.session_state["account_session"] = session
-
-    user_id = session["user_id"]
-    needs_load = (
-        not st.session_state.get("watchlist_loaded")
-        or st.session_state.get("watchlist_user_id") != user_id
-    )
-    if needs_load:
-        try:
-            st.session_state["watchlist"] = account_store.get_watchlist(session)
-        except AccountStoreError as error:
-            st.session_state["watchlist_loaded"] = False
-            return session, False, str(error)
-        st.session_state["watchlist_user_id"] = user_id
-        st.session_state["watchlist_loaded"] = True
-    return session, True, None
-
-
-process_google_oauth_callback()
-prepare_google_oauth_request()
-account_session, watchlist_ready, account_error = load_account_watchlist()
-
-
 def is_movie_saved(movie: dict) -> bool:
-    if account_store is None:
-        return False
-    movie_id = account_store.movie_id(movie)
+    target_id = movie_id(movie)
     return any(
-        account_store.movie_id(saved) == movie_id
+        movie_id(saved) == target_id
         for saved in st.session_state["watchlist"]
     )
 
 
 def save_watchlist_movie(movie: dict) -> None:
-    if account_store is None or account_session is None or not watchlist_ready:
-        st.error("Sign in to a configured account to save movies.")
-        return
-    try:
-        account_store.save_movie(account_session, movie)
-    except AccountStoreError as error:
-        st.error(f"Could not save this movie: {error}")
-        return
-    if not is_movie_saved(movie):
-        st.session_state["watchlist"].append(movie)
-    st.toast("Added to your saved watchlist.")
+    st.session_state["watchlist"] = add_movie(st.session_state["watchlist"], movie)
+    st.toast("Added to your session watchlist.")
     st.rerun()
 
 
 def remove_watchlist_movie(movie: dict) -> None:
-    if account_store is None or account_session is None or not watchlist_ready:
-        st.error("Sign in to a configured account to update your watchlist.")
-        return
-    try:
-        account_store.remove_movie(account_session, movie)
-    except AccountStoreError as error:
-        st.error(f"Could not remove this movie: {error}")
-        return
-    movie_id = account_store.movie_id(movie)
-    st.session_state["watchlist"] = [
-        saved
-        for saved in st.session_state["watchlist"]
-        if account_store.movie_id(saved) != movie_id
-    ]
+    st.session_state["watchlist"] = remove_movie(
+        st.session_state["watchlist"],
+        movie,
+    )
     st.toast("Removed from your saved watchlist.")
     st.rerun()
 
 
 def clear_watchlist() -> None:
-    if account_store is None or account_session is None or not watchlist_ready:
-        st.error("Sign in to a configured account to update your watchlist.")
-        return
-    try:
-        account_store.clear_watchlist(account_session)
-    except AccountStoreError as error:
-        st.error(f"Could not clear your watchlist: {error}")
-        return
     st.session_state["watchlist"] = []
     st.toast("Your watchlist has been cleared.")
     st.rerun()
@@ -655,60 +464,6 @@ if search_submitted:
         st.info("Recommendations use the local catalog. Add a TMDB key to retrieve live movie details.")
 
 search_query = st.session_state["catalog_search"]
-
-# -------------------------------------------------------------
-# ACCOUNT ACCESS
-# -------------------------------------------------------------
-account_message = st.session_state.pop("account_message", None)
-header_space, account_column = st.columns([8, 1])
-with account_column:
-    with st.popover("👤 Account"):
-        if account_store is None:
-            st.info(
-                "Google accounts need `GOOGLE_CLIENT_ID` and "
-                "`GOOGLE_CLIENT_SECRET` in Streamlit Secrets."
-            )
-        elif account_session:
-            st.caption(f"Signed in as **{account_session.get('name') or account_session['login']}**")
-            if not watchlist_ready:
-                st.warning("Your account is signed in, but the watchlist is unavailable.")
-                if account_error:
-                    st.error(account_error)
-                if st.button("Retry watchlist", key="account_retry_watchlist"):
-                    st.rerun()
-            if st.button("Log out", key="account_logout", use_container_width=True):
-                log_out_account()
-        else:
-            oauth_request = st.session_state.get("google_oauth_request")
-            if google_oauth_configured and oauth_request:
-                cookie = (
-                    f"{google_oauth_cookie}={oauth_request['state']}; "
-                    "Path=/; Max-Age=600; SameSite=Lax"
-                    + ("; Secure" if google_redirect_url.startswith("https://") else "")
-                )
-                components.html(
-                    f"<script>window.parent.document.cookie = {json.dumps(cookie)};</script>",
-                    height=0,
-                )
-                st.link_button(
-                    "Continue with Google",
-                    oauth_request["authorization_url"],
-                    type="primary",
-                )
-                st.caption(
-                    "Your watchlist is saved privately in your Google account and "
-                    "will be available when you sign in again."
-                )
-            elif google_oauth_configured:
-                st.error(account_config_error or "Could not prepare Google sign-in.")
-            else:
-                st.info(
-                    "Google sign-in also needs `GOOGLE_REDIRECT_URL` in Streamlit Secrets."
-                )
-            if account_error:
-                st.warning(account_error)
-if account_message:
-    st.warning(account_message)
 
 # -------------------------------------------------------------
 # HERO MARQUEE BANNER
@@ -1164,23 +919,13 @@ def render_cinema_card(
                     "✅ Saved",
                     key=f"unsave_{key_prefix}_{m_id}",
                     use_container_width=True,
-                    disabled=not watchlist_ready,
                 ):
                     remove_watchlist_movie(movie)
             else:
-                save_label = (
-                    "⭐ Watchlist"
-                    if watchlist_ready
-                    else "🔒 Sign in to save"
-                    if account_session is None
-                    else "🔒 Watchlist unavailable"
-                )
                 if st.button(
-                    save_label,
+                    "⭐ Watchlist",
                     key=f"save_{key_prefix}_{m_id}",
                     use_container_width=True,
-                    disabled=not watchlist_ready,
-                    help=None if watchlist_ready else "Open Account at the top right to sign in.",
                 ):
                     save_watchlist_movie(movie)
 
@@ -1903,13 +1648,9 @@ with tab_roulette:
                 b_save, b_spin = st.columns(2)
                 with b_save:
                     if st.button(
-                        "⭐ Add to Watchlist"
-                        if watchlist_ready
-                        else "🔒 Sign in to save",
+                        "⭐ Add to Watchlist",
                         key="roulette_save_btn",
                         use_container_width=True,
-                        disabled=not watchlist_ready,
-                        help=None if watchlist_ready else "Open Account at the top right to sign in.",
                     ):
                         save_watchlist_movie(chosen)
                 with b_spin:
@@ -2139,13 +1880,12 @@ with tab_watchlist:
         if (visible_movie := movie_with_verified_poster(movie)) is not None
     ]
     st.subheader(f"⭐ My Cinema Watchlist ({len(watchlist)} Films with posters)")
-    st.write("Your personal collection of saved films. Generate personalized recommendations based on your collective taste profile.")
+    st.write(
+        "Your session-only collection of saved films. Generate personalized "
+        "recommendations based on your collective taste profile."
+    )
 
-    if account_session is None:
-        st.info("Sign in from the top-right Account menu to access your saved watchlist.")
-    elif not watchlist_ready:
-        st.error(account_error or "Your saved watchlist could not be loaded.")
-    elif not saved_watchlist:
+    if not saved_watchlist:
         st.info("Your watchlist is empty! Click **⭐ Watchlist** on any movie card in the app to save it here.")
     elif not watchlist:
         if not tmdb.is_configured:
