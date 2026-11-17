@@ -38,25 +38,9 @@ Open [http://localhost:8501](http://localhost:8501). The bundled CSV contains th
    `TMDB_API_TOKEN` is also accepted if you use a TMDB read access token. The TMDB integration is optional; the curated catalog and recommendation features work without a credential. You can also enter a key or token in the app's **Configure TMDB API key** panel for the current session.
    After deployment, open **Filters and TMDB settings** and select **Test TMDB** to verify the secret is accepted and live movie data can be loaded.
 
-## Google accounts and watchlists
+## Watchlists
 
-Visitors can browse without an account. **Continue with Google** signs users in and automatically creates their CineMatch account the first time they authorize the app; no separate password signup is needed. CineMatch saves each user's watchlist in the private `appDataFolder` area of that user's Google Drive. The list is tied to their Google account and is restored when they sign in again. This app data is not shown in the normal Drive file list; it is accessible to CineMatch through the Google Drive API.
-
-To configure sign-in and storage:
-
-1. In [Google Cloud Console](https://console.cloud.google.com/), create or select a project and enable the **Google Drive API**.
-2. Configure the OAuth consent screen and create an **OAuth client ID** of type **Web application**. Add your deployed app URL (for example, `https://your-app.streamlit.app`) as an authorized redirect URI. For local development, create a separate client with `http://localhost:8501` as its authorized redirect URI. If the consent screen is in testing mode, add the accounts that should be able to sign in as test users.
-3. In Streamlit Community Cloud, add the following under **App settings → Secrets**. For local development, copy `.env.example` to `.env` and fill in the same values.
-
-   ```toml
-   GOOGLE_CLIENT_ID = "your-google-oauth-client-id"
-   GOOGLE_CLIENT_SECRET = "your-google-oauth-client-secret"
-   GOOGLE_REDIRECT_URL = "https://your-app.streamlit.app"
-   ```
-
-Keep the client secret only in Streamlit Secrets or your local `.env`; never commit it to GitHub. CineMatch requests only identity information and the Google Drive app-data scope needed for its watchlist. Logging out clears the local app session; Google account access can be revoked in the Google Account's third-party connections settings.
-
-Existing watchlists stored in GitHub Gists are not automatically migrated. They remain in GitHub, but the app no longer signs in with GitHub.
+No account or sign-in is required. Select **⭐ Watchlist** on any movie card to save it to the current Streamlit session. The list is available across app reruns during that session, but is cleared when the session ends or the page is reloaded; it is not synced across devices.
 
 ## Catalog tools
 
